@@ -1,8 +1,10 @@
 # Release Audit: 1.4.3-public.1
 
-Status: final local candidate; not published. The application and installer
-were not launched during the build or audit. User installation and behavioral
-testing remain pending.
+Status: published on 2026-07-31 from release commit
+`6f12b27fe738367b511cadff42451e34768aa57a` under tag
+`excelsis-helper-v1.4.3-public.1`. The application and installer were not
+launched during the build or audit. User installation and behavioral testing
+remain pending.
 
 ## Release model
 
@@ -152,3 +154,13 @@ testing remain pending.
 
 Unsigned status is explicit and is not treated as signing success. Authenticode
 signing remains recommended before broad public distribution.
+
+## Post-publication verification
+
+- The annotated release tag dereferences to the exact audited release commit.
+- All four release assets were downloaded back from GitHub. Their sizes and
+  SHA-256 hashes match the local release files byte-for-byte.
+- GitHub Pages built the release commit successfully, and the live page returns
+  HTTP 200 with the expected installer, ExcelsisView, Excelsis3D, support, and
+  development links.
+- GitHub CodeQL completed successfully against the release commit.
