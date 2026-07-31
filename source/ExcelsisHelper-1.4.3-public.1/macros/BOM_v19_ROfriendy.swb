@@ -1,0 +1,3157 @@
+' Read-only-friendly project variant generated on 2026-05-18.
+' Original macro left untouched. This variant should only write independent output files.
+' Source: BOM_v19.swb
+
+Option Explicit
+
+Private Const swDocPART As Long = 1
+Private Const swDocASSEMBLY As Long = 2
+Private Const swSolidBody As Long = 0
+Private Const swSaveAsCurrentVersion As Long = 0
+Private Const swSaveAsOptions_Silent As Long = 1
+Private Const swCustomInfoText As Long = 30
+Private Const swCustomPropertyReplaceValue As Long = 2
+Private Const swOpenDocOptions_Silent As Long = 1
+Private Const swOpenDocOptions_ReadOnly As Long = 2
+Private Const swIsometricView As Long = 7
+Private Const STOCK_LENGTH_MM As Double = 6000#
+Private Const SAW_KERF_MM As Double = 2#
+Private Const STOCK_DP_SCALE As Long = 10
+Private Const BOM_EXPORT_LANGUAGE As String = "en"
+Private Type BomItem
+    key As String
+
+    PartName As String
+
+    configName As String
+
+    BoundingBox As String
+
+    L As Double
+
+    W As Double
+
+    H As Double
+
+    diameter As Double
+
+    category As String
+
+    Qty As Long
+
+    HiddenQty As Long
+
+End Type
+
+Private Type CutItem
+    key As String
+
+    Refs As String
+
+    Profile As String
+
+    Length As Double
+
+    W As Double
+
+    H As Double
+
+    BoundingBox As String
+
+    EndA As String
+
+    EndB As String
+
+    Orientation As String
+
+    PartPath As String
+
+    ConfigName As String
+
+    Qty As Long
+
+    HiddenQty As Long
+
+End Type
+
+
+Private BOM() As BomItem
+Private BOM_Count As Long
+
+Private CUTLIST() As CutItem
+Private CUT_Count As Long
+
+
+Private swApp As Object
+Private swModel As Object
+
+
+' ExcelsisAutomation updates BOM_EXPORT_LANGUAGE in this .swb from Settings.
+Private Function BomLanguage() As String
+    BomLanguage = LCase$(Trim$(BOM_EXPORT_LANGUAGE))
+    If BomLanguage <> "en" Then BomLanguage = "hu"
+End Function
+
+Private Function BomText(key As String) As String
+    If BomLanguage() = "en" Then
+        Select Case key
+            Case "cutSheetName": BomText = "CutList"
+            Case "stockPlanTitle": BomText = "Bar allocation"
+            Case "barUnit": BomText = "bar"
+            Case "sawKerf": BomText = "saw kerf"
+            Case "profile": BomText = "Profile"
+            Case "bar6m": BomText = "6 m bar"
+            Case "piecesToCut": BomText = "Pieces to cut"
+            Case "used": BomText = "Used"
+            Case "remaining": BomText = "Remaining"
+            Case "notes": BomText = "Notes"
+            Case "visibleQty": BomText = "Visible qty"
+            Case "hiddenSkipped": BomText = "Hidden skipped"
+            Case "totalRemaining": BomText = "Total remaining"
+            Case "length": BomText = "Length"
+            Case "qty": BomText = "Qty"
+            Case "hiddenQty": BomText = "Hidden qty"
+            Case "endA": BomText = "End A"
+            Case "endB": BomText = "End B"
+            Case "orientation": BomText = "Orientation"
+            Case "partConfig": BomText = "Part / configuration"
+            Case "bbox": BomText = "Bounding box"
+            Case "angledEnds": BomText = "Angle-cut end pieces:"
+            Case "part": BomText = "Part"
+            Case "config": BomText = "Configuration"
+            Case "diameter": BomText = "Diameter"
+            Case "category": BomText = "Category"
+            Case "sheetCategory": BomText = "SHEET"
+            Case "savedTo": BomText = "Saved to:"
+            Case "excelSave": BomText = "Excel save"
+            Case "saveFallbackOpen": BomText = "is open or not writable."
+            Case "saveFailed": BomText = "Could not save the Excel file:"
+            Case Else: BomText = key
+        End Select
+    Else
+        Select Case key
+            Case "cutSheetName": BomText = "Darabjegyzek"
+            Case "stockPlanTitle": BomText = "Sz" & ChrW(225) & "lkioszt" & ChrW(225) & "s"
+            Case "barUnit": BomText = "sz" & ChrW(225) & "l"
+            Case "sawKerf": BomText = "f" & ChrW(369) & "r" & ChrW(233) & "szr" & ChrW(233) & "s"
+            Case "profile": BomText = "Profil"
+            Case "bar6m": BomText = "6 m sz" & ChrW(225) & "l"
+            Case "piecesToCut": BomText = "V" & ChrW(225) & "gand" & ChrW(243) & " darabok"
+            Case "used": BomText = "Felhaszn" & ChrW(225) & "lt"
+            Case "remaining": BomText = "Marad" & ChrW(233) & "k"
+            Case "notes": BomText = "Megjegyz" & ChrW(233) & "s"
+            Case "visibleQty": BomText = "L" & ChrW(225) & "that" & ChrW(243) & " db"
+            Case "hiddenSkipped": BomText = "Rejtett kihagyva"
+            Case "totalRemaining": BomText = ChrW(214) & "ssz. marad" & ChrW(233) & "k"
+            Case "length": BomText = "Hossz"
+            Case "qty": BomText = "Db"
+            Case "hiddenQty": BomText = "Rejtett db"
+            Case "endA": BomText = "V" & ChrW(233) & "g A"
+            Case "endB": BomText = "V" & ChrW(233) & "g B"
+            Case "orientation": BomText = "T" & ChrW(225) & "jol" & ChrW(225) & "s"
+            Case "partConfig": BomText = "Alkatr" & ChrW(233) & "sz / konfigur" & ChrW(225) & "ci" & ChrW(243)
+            Case "bbox": BomText = "Befoglal" & ChrW(243) & " m" & ChrW(233) & "ret"
+            Case "angledEnds": BomText = "Fokba v" & ChrW(225) & "gott v" & ChrW(233) & "g" & ChrW(369) & " darabok:"
+            Case "part": BomText = "Alkatr" & ChrW(233) & "sz"
+            Case "config": BomText = "Konfigur" & ChrW(225) & "ci" & ChrW(243)
+            Case "diameter": BomText = ChrW(193) & "tm" & ChrW(233) & "r" & ChrW(337)
+            Case "category": BomText = "Kateg" & ChrW(243) & "ria"
+            Case "sheetCategory": BomText = "LEMEZ"
+            Case "savedTo": BomText = "Mentve ide:"
+            Case "excelSave": BomText = "Excel ment" & ChrW(233) & "s"
+            Case "saveFallbackOpen": BomText = "nyitva van vagy nem " & ChrW(237) & "rhat" & ChrW(243) & "."
+            Case "saveFailed": BomText = "Nem siker" & ChrW(252) & "lt menteni az Excel f" & ChrW(225) & "jlt:"
+            Case Else: BomText = key
+        End Select
+    End If
+End Function
+
+' ===============================
+
+' MAIN
+
+' ===============================
+
+Public Sub main()
+
+
+    Set swApp = Application.SldWorks
+
+    Set swModel = swApp.ActiveDoc
+
+    
+
+    If swModel Is Nothing Then Exit Sub
+
+    If swModel.GetType <> swDocASSEMBLY Then
+
+        MsgBox "Open an assembly"
+
+        Exit Sub
+
+    End If
+
+    
+
+    Dim reportMode As Integer
+
+    reportMode = AskReportMode()
+
+    If reportMode = 0 Then Exit Sub
+
+    BOM_Count = 0
+
+    Erase BOM
+
+    CUT_Count = 0
+
+    Erase CUTLIST
+
+    swModel.ForceRebuild3 False
+    
+
+    Dim swAssy As Object
+
+    Set swAssy = swModel
+
+    
+
+    swAssy.ResolveAllLightWeightComponents True
+
+    
+
+    Dim vComps As Variant
+
+    vComps = swAssy.GetComponents(True)
+
+    
+
+    If IsEmpty(vComps) Then Exit Sub
+
+    Dim dictAssemblyParts As Object
+    Dim dictInitiallyVisiblePartWindows As Object
+
+    Set dictInitiallyVisiblePartWindows = BuildVisibleOpenPartWindowPathDict()
+    Debug.Print "Initially visible part windows: " & dictInitiallyVisiblePartWindows.Count
+
+    Dim vCleanupComps As Variant
+
+    vCleanupComps = swAssy.GetComponents(False)
+
+    If IsEmpty(vCleanupComps) Then
+
+        Set dictAssemblyParts = BuildAssemblyPartPathDict(vComps)
+
+    Else
+
+        Set dictAssemblyParts = BuildAssemblyPartPathDict(vCleanupComps)
+
+    End If
+
+    Dim folder As String
+
+    folder = Left(swModel.GetPathName, InStrRev(swModel.GetPathName, "\"))
+
+
+
+    
+
+    Dim i As Long
+    Dim comp As Object
+
+    If reportMode = 2 Then
+
+        For i = 0 To UBound(vComps)
+
+            Set comp = vComps(i)
+
+            If Not comp Is Nothing Then
+
+                If Not comp.IsSuppressed Then
+
+                    ProcessCutComponent comp
+
+                End If
+
+            End If
+
+        Next i
+
+        SortCutList
+
+        Dim cutImgPath As String
+
+        cutImgPath = folder & "cutlist_snapshot.png"
+
+        SaveSnapshot cutImgPath
+
+        ExportCutListToExcel folder, cutImgPath
+
+        CloseAssemblyPartDocs dictAssemblyParts, dictInitiallyVisiblePartWindows
+
+        MsgBox "Profile cutlist export complete."
+
+        Exit Sub
+
+    End If
+    
+
+    For i = 0 To UBound(vComps)
+
+        Set comp = vComps(i)
+
+        
+
+        If Not comp Is Nothing Then
+
+            If Not comp.IsSuppressed Then
+
+                ProcessComponent comp
+
+            End If
+
+        End If
+
+    Next i
+
+    
+
+    SortBOM
+
+    
+
+    
+
+    Dim imgPath As String
+
+    imgPath = folder & "snapshot.png"
+
+    
+
+    SaveSnapshot imgPath
+
+    ExportToExcel folder, imgPath
+
+    CloseAssemblyPartDocs dictAssemblyParts, dictInitiallyVisiblePartWindows
+
+    
+
+    MsgBox "BOM export complete."
+
+
+
+End Sub
+
+
+
+' ===============================
+
+' ASSEMBLY CLEANUP
+
+' ===============================
+
+Private Function BuildVisibleOpenPartWindowPathDict() As Object
+
+    Dim dict As Object
+
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Dim swDoc As Object
+
+    On Error Resume Next
+
+    Set swDoc = swApp.GetFirstDocument
+
+    Do While Not swDoc Is Nothing
+
+        If swDoc.GetType = swDocPART Then
+
+            Dim isVisible As Boolean
+
+            isVisible = False
+
+            Err.Clear
+
+            isVisible = CBool(swDoc.Visible)
+
+            If Err.Number <> 0 Then
+
+                Err.Clear
+
+                isVisible = False
+
+            End If
+
+            If isVisible Then
+
+                Dim pathName As String
+
+                pathName = swDoc.GetPathName
+
+                If IsPartPath(pathName) Then
+
+                    Dim key As String
+
+                    key = LCase(pathName)
+
+                    If Not dict.Exists(key) Then dict.Add key, pathName
+
+                End If
+
+            End If
+
+        End If
+
+        Set swDoc = swDoc.GetNext
+
+    Loop
+
+    On Error GoTo 0
+
+    Set BuildVisibleOpenPartWindowPathDict = dict
+
+End Function
+
+Private Function BuildAssemblyPartPathDict(vComps As Variant) As Object
+
+    Dim dict As Object
+
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    If IsEmpty(vComps) Then
+
+        Set BuildAssemblyPartPathDict = dict
+
+        Exit Function
+
+    End If
+
+    Dim i As Long
+
+    For i = 0 To UBound(vComps)
+
+        Dim comp As Object
+
+        Set comp = vComps(i)
+
+        If Not comp Is Nothing Then
+
+            If Not comp.IsSuppressed Then
+
+                Dim partPath As String
+
+                partPath = ""
+
+                On Error Resume Next
+
+                partPath = comp.GetPathName
+
+                On Error GoTo 0
+
+                If IsPartPath(partPath) Then
+
+                    Dim key As String
+
+                    key = LCase(partPath)
+
+                    If Not dict.Exists(key) Then dict.Add key, partPath
+
+                End If
+
+            End If
+
+        End If
+
+    Next i
+
+    Set BuildAssemblyPartPathDict = dict
+
+End Function
+
+Private Function IsPartPath(pathName As String) As Boolean
+
+    IsPartPath = (LCase(Right(pathName, 6)) = "sldprt")
+
+End Function
+
+Private Function IsComponentHidden(comp As Object) As Boolean
+
+    If comp Is Nothing Then Exit Function
+
+    On Error Resume Next
+
+    Err.Clear
+
+    IsComponentHidden = comp.IsHidden(True)
+
+    If Err.Number <> 0 Then
+
+        Err.Clear
+
+        Dim visState As Long
+
+        visState = comp.Visible
+
+        If Err.Number = 0 Then IsComponentHidden = (visState = 0)
+
+    End If
+
+    If IsComponentHidden Then GoTo Done
+
+    Dim parentComp As Object
+
+    Set parentComp = Nothing
+
+    Err.Clear
+
+    Set parentComp = comp.GetParent
+
+    Do While Err.Number = 0 And Not parentComp Is Nothing
+
+        Err.Clear
+
+        If parentComp.IsHidden(True) Then
+
+            IsComponentHidden = True
+
+            Exit Do
+
+        End If
+
+        Err.Clear
+
+        Set parentComp = parentComp.GetParent
+
+    Loop
+
+Done:
+
+    On Error GoTo 0
+
+End Function
+
+Private Sub CloseAssemblyPartDocs(dictAssemblyParts As Object, dictInitiallyVisiblePartWindows As Object)
+
+    If dictAssemblyParts Is Nothing Then Exit Sub
+
+    Dim key As Variant
+
+    For Each key In dictAssemblyParts.Keys
+
+        If Not dictInitiallyVisiblePartWindows Is Nothing Then
+
+            If dictInitiallyVisiblePartWindows.Exists(CStr(key)) Then
+
+                Debug.Print "  Leaving initially visible part window open: " & CStr(dictAssemblyParts(key))
+
+                GoTo NextDoc
+
+            End If
+
+        End If
+
+        Dim swDoc As Object
+
+        Set swDoc = Nothing
+
+        On Error Resume Next
+
+        Set swDoc = swApp.GetOpenDocumentByName(CStr(dictAssemblyParts(key)))
+
+        If Not swDoc Is Nothing Then
+
+            If swDoc.GetType = swDocPART Then swApp.CloseDoc swDoc.GetTitle
+
+        End If
+
+        On Error GoTo 0
+
+NextDoc:
+
+    Next key
+
+    On Error Resume Next
+
+    Dim actErr As Long
+
+    If Not swModel Is Nothing Then swApp.ActivateDoc3 swModel.GetTitle, False, 0, actErr
+
+    On Error GoTo 0
+
+End Sub
+
+
+
+' ===============================
+
+' MODE
+
+' ===============================
+
+Private Function AskReportMode() As Integer
+
+    Dim r As VbMsgBoxResult
+
+    r = MsgBox("Choose export:" & vbCrLf & vbCrLf & _
+               "YES = BOM" & vbCrLf & _
+               "NO = profile cutlist" & vbCrLf & _
+               "CANCEL = abort", _
+               vbYesNoCancel + vbQuestion, "BOM / Cutlist")
+
+    If r = vbYes Then
+
+        AskReportMode = 1
+
+    ElseIf r = vbNo Then
+
+        AskReportMode = 2
+
+    End If
+
+End Function
+
+
+
+' ===============================
+
+' PROCESS COMPONENT
+' ===============================
+
+Private Sub ProcessComponent(comp As Object)
+
+
+    Dim isHiddenComp As Boolean
+
+    isHiddenComp = IsComponentHidden(comp)
+
+    Dim swPart As Object
+
+    Set swPart = comp.GetModelDoc2
+
+    
+
+    If swPart Is Nothing Then Exit Sub
+
+    If swPart.GetType <> swDocPART Then Exit Sub
+
+    
+
+    Dim configName As String
+
+    configName = comp.ReferencedConfiguration
+
+    
+
+    Dim key As String
+
+    key = swPart.GetPathName & "|" & configName
+
+    
+
+    Dim idx As Long
+
+    idx = FindItem(key)
+
+    
+
+    If idx > 0 Then
+
+        BOM(idx).Qty = BOM(idx).Qty + 1
+
+        If isHiddenComp Then BOM(idx).HiddenQty = BOM(idx).HiddenQty + 1
+
+        Exit Sub
+
+    End If
+
+    
+
+    Dim oldConfigName As String
+
+    If Not ActivatePartConfig(swPart, configName, oldConfigName) Then Exit Sub
+
+    Dim swPartDoc As Object
+    Set swPartDoc = swPart
+
+    
+
+    Dim vBox As Variant
+
+    vBox = GetAccuratePartBox(swPartDoc)
+    
+
+    If IsEmpty(vBox) Then GoTo CleanUp
+    
+
+    Dim dims(2) As Double
+
+    dims(0) = Abs(vBox(3) - vBox(0)) * 1000#
+
+    dims(1) = Abs(vBox(4) - vBox(1)) * 1000#
+
+    dims(2) = Abs(vBox(5) - vBox(2)) * 1000#
+
+    
+
+    Sort3 dims
+
+    
+
+    Dim L As Double, W As Double, H As Double
+
+    L = dims(0): W = dims(1): H = dims(2)
+
+    
+
+    Dim detectedDia As Double
+
+    detectedDia = GetDetectedDiameter(swPartDoc)
+
+    
+
+    Dim ratio As Double
+
+    ratio = L / H
+
+    
+
+    Dim category As String
+
+    Dim diameter As Double
+
+    
+
+    ' Sheet metal and thin plate grouping for the normal BOM.
+
+    If IsSheetMetalPart(swPart) Then
+
+        
+
+        category = "SHEET"
+
+        diameter = 0
+
+        
+
+    ElseIf H < 16 And ratio > 3 Then
+
+        
+
+        category = "SHEET"
+
+        diameter = 0
+
+        
+
+    Else
+
+        
+
+        category = ""
+
+        
+
+        If detectedDia > 0 And detectedDia > (0.3 * L) Then
+
+            diameter = detectedDia
+
+        Else
+
+            diameter = H
+
+        End If
+
+        
+
+    End If
+
+    
+
+    Dim bboxStr As String
+
+    bboxStr = Round(L, 1) & " x " & Round(W, 1) & " x " & Round(H, 1)
+
+    
+
+    BOM_Count = BOM_Count + 1
+
+    ReDim Preserve BOM(1 To BOM_Count)
+
+    
+
+    With BOM(BOM_Count)
+
+        .key = key
+
+        .PartName = swPart.GetTitle
+
+        .configName = configName
+
+        .BoundingBox = bboxStr
+
+        .L = L
+
+        .W = W
+
+        .H = H
+
+        .diameter = diameter
+
+        .category = category
+
+        .Qty = 1
+
+        If isHiddenComp Then .HiddenQty = 1
+
+    End With
+
+CleanUp:
+
+    RestorePartConfig swPart, oldConfigName
+
+
+End Sub
+
+
+
+' ===============================
+
+' CUTLIST
+
+' ===============================
+
+Private Sub ProcessCutComponent(comp As Object)
+
+    Dim isHiddenComp As Boolean
+
+    isHiddenComp = IsComponentHidden(comp)
+
+    Dim swPart As Object
+
+    Set swPart = comp.GetModelDoc2
+
+    If swPart Is Nothing Then Exit Sub
+
+    If swPart.GetType <> swDocPART Then Exit Sub
+
+    Dim configName As String
+
+    configName = comp.ReferencedConfiguration
+
+    Dim oldConfigName As String
+
+    If Not ActivatePartConfig(swPart, configName, oldConfigName) Then Exit Sub
+
+    Dim swPartDoc As Object
+
+    Set swPartDoc = swPart
+
+    Dim vBox As Variant
+
+    vBox = GetAccuratePartBox(swPartDoc)
+
+    If IsEmpty(vBox) Then GoTo CleanUp
+
+    Dim dims(2) As Double
+
+    dims(0) = Abs(vBox(3) - vBox(0)) * 1000#
+
+    dims(1) = Abs(vBox(4) - vBox(1)) * 1000#
+
+    dims(2) = Abs(vBox(5) - vBox(2)) * 1000#
+
+    Sort3 dims
+
+    Dim L As Double, W As Double, H As Double
+
+    L = dims(0): W = dims(1): H = dims(2)
+
+    If Not IsProfileCandidate(swPart.GetTitle, L, W, H, IsSheetMetalPart(swPart)) Then GoTo CleanUp
+
+    Dim detectedDia As Double
+
+    detectedDia = GetDetectedDiameter(swPartDoc)
+
+    Dim profile As String
+
+    profile = GetProfileName(swPart.GetTitle, W, H, detectedDia)
+
+    Dim endA As String
+
+    Dim endB As String
+
+    Dim orient As String
+
+    GetMiterInfo swPartDoc, vBox, endA, endB, orient
+
+    Dim bboxStr As String
+
+    bboxStr = FormatDim(L) & " x " & FormatDim(W) & " x " & FormatDim(H)
+
+    Dim key As String
+
+    key = profile & "|" & FormatDim(L) & "|" & endA & "|" & endB & "|" & orient
+
+    Dim refText As String
+
+    refText = swPart.GetTitle & " (" & configName & ")"
+
+    Dim idx As Long
+
+    idx = FindCutItem(key)
+
+    If idx > 0 Then
+
+        CUTLIST(idx).Qty = CUTLIST(idx).Qty + 1
+
+        If isHiddenComp Then CUTLIST(idx).HiddenQty = CUTLIST(idx).HiddenQty + 1
+
+        CUTLIST(idx).Refs = AppendUniqueRef(CUTLIST(idx).Refs, refText)
+
+        GoTo CleanUp
+
+    End If
+
+    CUT_Count = CUT_Count + 1
+
+    ReDim Preserve CUTLIST(1 To CUT_Count)
+
+    With CUTLIST(CUT_Count)
+
+        .key = key
+
+        .Refs = refText
+
+        .Profile = profile
+
+        .Length = L
+
+        .W = W
+
+        .H = H
+
+        .BoundingBox = bboxStr
+
+        .EndA = endA
+
+        .EndB = endB
+
+        .Orientation = orient
+
+        .PartPath = swPart.GetPathName
+
+        .ConfigName = configName
+
+        .Qty = 1
+
+        If isHiddenComp Then .HiddenQty = 1
+
+    End With
+
+CleanUp:
+
+    RestorePartConfig swPart, oldConfigName
+
+End Sub
+
+Private Function IsProfileCandidate(partName As String, L As Double, W As Double, _
+                                    H As Double, isSheetMetal As Boolean) As Boolean
+
+    If isSheetMetal Then Exit Function
+
+    Dim n As String
+
+    n = LCase(partName)
+
+    Dim nameHit As Boolean
+
+    nameHit = (InStr(1, n, "zsz", vbTextCompare) > 0 Or _
+               InStr(1, n, "cso", vbTextCompare) > 0 Or _
+               InStr(1, n, "tube", vbTextCompare) > 0 Or _
+               InStr(1, n, "pipe", vbTextCompare) > 0 Or _
+               InStr(1, n, "profil", vbTextCompare) > 0 Or _
+               InStr(1, n, "szelv", vbTextCompare) > 0 Or _
+               InStr(1, n, "angle", vbTextCompare) > 0)
+
+    If nameHit Then
+
+        IsProfileCandidate = (L >= W * 2.5 And W <= H * 3#)
+
+        Exit Function
+
+    End If
+
+    If W > H * 3# Then Exit Function
+
+    IsProfileCandidate = (L >= W * 4# And W <= 180#)
+
+End Function
+
+Private Function GetProfileName(partName As String, W As Double, H As Double, detectedDia As Double) As String
+
+    Dim n As String
+
+    n = LCase(partName)
+
+    If detectedDia > 0 And Abs(W - H) <= 2# Then
+
+        Dim roundProfileName As Boolean
+
+        roundProfileName = (InStr(1, n, "cso", vbTextCompare) > 0 Or _
+                            InStr(1, n, "pipe", vbTextCompare) > 0 Or _
+                            InStr(1, n, "tube", vbTextCompare) > 0)
+
+        If (roundProfileName And detectedDia >= W * 0.65) Or detectedDia >= W * 0.85 Then
+
+            GetProfileName = "D" & FormatDim(detectedDia)
+
+            Exit Function
+
+        End If
+
+    End If
+
+    GetProfileName = FormatDim(W) & " x " & FormatDim(H)
+
+
+End Function
+
+Private Sub GetMiterInfo(swPart As Object, vBox As Variant, _
+                         ByRef endA As String, ByRef endB As String, _
+                         ByRef orient As String)
+
+    Dim axis As Integer
+
+    axis = LongestBoxAxis(vBox)
+
+    Dim angleA As Double, angleB As Double
+
+    Dim dirA As String, dirB As String
+
+    If Not FindEndFaceInfo(swPart, vBox, axis, True, angleA, dirA) Then
+
+        endA = HuUnknown()
+
+    Else
+
+        endA = FormatEndCut(angleA, dirA)
+
+    End If
+
+    If Not FindEndFaceInfo(swPart, vBox, axis, False, angleB, dirB) Then
+
+        endB = HuUnknown()
+
+    Else
+
+        endB = FormatEndCut(angleB, dirB)
+
+    End If
+
+    If angleA < 2# And angleB < 2# Then
+
+        orient = ""
+
+    ElseIf angleA >= 2# And angleB >= 2# Then
+
+        If dirA = dirB Then
+
+            orient = "mindk" & ChrW(233) & "t v" & ChrW(233) & "g azonos ir" & ChrW(225) & "nyba"
+
+        ElseIf AreOppositeDirections(dirA, dirB) Then
+
+            orient = "v" & ChrW(233) & "gek ellent" & ChrW(233) & "tes ir" & ChrW(225) & "nyba"
+
+        Else
+
+            orient = "v" & ChrW(233) & "gek elt" & ChrW(233) & "r" & ChrW(337) & " s" & ChrW(237) & "kban"
+
+        End If
+
+    Else
+
+        orient = "egy fokba v" & ChrW(225) & "gott v" & ChrW(233) & "g"
+
+    End If
+
+End Sub
+
+Private Function FindEndFaceInfo(swPart As Object, vBox As Variant, _
+                                 axis As Integer, isMinEnd As Boolean, _
+                                 ByRef angleDeg As Double, ByRef dirText As String) As Boolean
+
+    Dim vBodies As Variant
+
+    vBodies = swPart.GetBodies2(swSolidBody, True)
+
+    If IsEmpty(vBodies) Then Exit Function
+
+    Dim axisLen As Double
+
+    axisLen = Abs(vBox(axis + 3) - vBox(axis))
+
+    If axisLen <= 0# Then Exit Function
+
+    Dim bestScore As Double
+
+    bestScore = -1#
+
+    Dim i As Long, j As Long
+
+    For i = 0 To UBound(vBodies)
+
+        Dim swBody As Object
+
+        Set swBody = vBodies(i)
+
+        If swBody Is Nothing Then GoTo NextBody
+
+        Dim vFaces As Variant
+
+        vFaces = swBody.GetFaces
+
+        If IsEmpty(vFaces) Then GoTo NextBody
+
+        For j = 0 To UBound(vFaces)
+
+            Dim swFace As Object
+
+            Set swFace = vFaces(j)
+
+            If swFace Is Nothing Then GoTo NextFace
+
+            Dim swSurf As Object
+
+            Set swSurf = swFace.GetSurface
+
+            If swSurf Is Nothing Then GoTo NextFace
+
+            If Not swSurf.IsPlane Then GoTo NextFace
+
+            Dim p As Variant
+
+            p = swSurf.PlaneParams
+
+            If IsEmpty(p) Then GoTo NextFace
+
+            Dim nx As Double, ny As Double, nz As Double
+
+            nx = p(0): ny = p(1): nz = p(2)
+
+            Dim nLen As Double
+
+            nLen = Sqr(nx * nx + ny * ny + nz * nz)
+
+            If nLen <= 0# Then GoTo NextFace
+
+            nx = nx / nLen
+
+            ny = ny / nLen
+
+            nz = nz / nLen
+
+            NormalizeEndNormal nx, ny, nz, axis, isMinEnd
+
+            Dim axisComp As Double
+
+            axisComp = Abs(VecComp(nx, ny, nz, axis))
+
+            If axisComp < 0.15 Then GoTo NextFace
+
+            Dim fb As Variant
+
+            fb = swFace.GetBox
+
+            If IsEmpty(fb) Then GoTo NextFace
+
+            Dim centerAxis As Double
+
+            centerAxis = (fb(axis) + fb(axis + 3)) / 2#
+
+            Dim dist As Double
+
+            If isMinEnd Then
+
+                dist = Abs(centerAxis - vBox(axis))
+
+            Else
+
+                dist = Abs(vBox(axis + 3) - centerAxis)
+
+            End If
+
+            If dist > axisLen * 0.22 Then GoTo NextFace
+
+            Dim area As Double
+
+            area = swFace.GetArea
+
+            Dim score As Double
+
+            score = area * axisComp
+
+            If score > bestScore Then
+
+                bestScore = score
+
+                angleDeg = Acos01(axisComp) * 180# / PiValue()
+
+                dirText = MiterDirectionText(nx, ny, nz, axis)
+
+                FindEndFaceInfo = True
+
+            End If
+
+NextFace:
+
+        Next j
+
+NextBody:
+
+    Next i
+
+End Function
+
+Private Sub NormalizeEndNormal(ByRef nx As Double, ByRef ny As Double, ByRef nz As Double, _
+                               axis As Integer, isMinEnd As Boolean)
+
+    Dim axisComp As Double
+
+    axisComp = VecComp(nx, ny, nz, axis)
+
+    If isMinEnd Then
+
+        If axisComp > 0# Then
+
+            nx = -nx: ny = -ny: nz = -nz
+
+        End If
+
+    Else
+
+        If axisComp < 0# Then
+
+            nx = -nx: ny = -ny: nz = -nz
+
+        End If
+
+    End If
+
+End Sub
+
+Private Function FormatEndCut(angleDeg As Double, dirText As String) As String
+
+    If angleDeg < 5# Then
+
+        FormatEndCut = HuSquare()
+
+    Else
+
+        FormatEndCut = FormatDim(angleDeg) & ChrW(176) & " " & dirText
+
+    End If
+
+End Function
+
+Private Function MiterDirectionText(nx As Double, ny As Double, nz As Double, axis As Integer) As String
+
+    Dim a1 As Integer, a2 As Integer
+
+    GetPerpAxes axis, a1, a2
+
+    Dim v1 As Double, v2 As Double
+
+    v1 = VecComp(nx, ny, nz, a1)
+
+    v2 = VecComp(nx, ny, nz, a2)
+
+    If Abs(v1) < 0.05 And Abs(v2) < 0.05 Then
+
+        MiterDirectionText = ""
+
+    ElseIf Abs(v1) >= Abs(v2) Then
+
+        MiterDirectionText = SignText(v1) & AxisName(a1) & " fel" & ChrW(233)
+
+    Else
+
+        MiterDirectionText = SignText(v2) & AxisName(a2) & " fel" & ChrW(233)
+
+    End If
+
+End Function
+
+Private Function HuSquare() As String
+
+    HuSquare = "Der" & ChrW(233) & "ksz" & ChrW(246) & "g" & ChrW(369)
+
+End Function
+
+Private Function HuUnknown() As String
+
+    HuUnknown = "Ismeretlen"
+
+End Function
+
+Private Function AreOppositeDirections(a As String, b As String) As Boolean
+
+    If Len(a) = 0 Or Len(b) = 0 Then Exit Function
+
+    If Replace(a, "+", "-") = b Or Replace(a, "-", "+") = b Then
+
+        AreOppositeDirections = True
+
+    End If
+
+End Function
+
+Private Function LongestBoxAxis(vBox As Variant) As Integer
+
+    Dim x As Double, y As Double, z As Double
+
+    x = Abs(vBox(3) - vBox(0))
+
+    y = Abs(vBox(4) - vBox(1))
+
+    z = Abs(vBox(5) - vBox(2))
+
+    If x >= y And x >= z Then
+
+        LongestBoxAxis = 0
+
+    ElseIf y >= x And y >= z Then
+
+        LongestBoxAxis = 1
+
+    Else
+
+        LongestBoxAxis = 2
+
+    End If
+
+End Function
+
+Private Function VecComp(nx As Double, ny As Double, nz As Double, axis As Integer) As Double
+
+    If axis = 0 Then
+
+        VecComp = nx
+
+    ElseIf axis = 1 Then
+
+        VecComp = ny
+
+    Else
+
+        VecComp = nz
+
+    End If
+
+End Function
+
+Private Sub GetPerpAxes(axis As Integer, ByRef a1 As Integer, ByRef a2 As Integer)
+
+    If axis = 0 Then
+
+        a1 = 1: a2 = 2
+
+    ElseIf axis = 1 Then
+
+        a1 = 0: a2 = 2
+
+    Else
+
+        a1 = 0: a2 = 1
+
+    End If
+
+End Sub
+
+Private Function AxisName(axis As Integer) As String
+
+    If axis = 0 Then
+
+        AxisName = "X"
+
+    ElseIf axis = 1 Then
+
+        AxisName = "Y"
+
+    Else
+
+        AxisName = "Z"
+
+    End If
+
+End Function
+
+Private Function SignText(v As Double) As String
+
+    If v >= 0# Then
+
+        SignText = "+"
+
+    Else
+
+        SignText = "-"
+
+    End If
+
+End Function
+
+Private Function Acos01(v As Double) As Double
+
+    If v >= 1# Then
+
+        Acos01 = 0#
+
+    ElseIf v <= 0# Then
+
+        Acos01 = PiValue() / 2#
+
+    Else
+
+        Acos01 = Atn(Sqr(1# - v * v) / v)
+
+    End If
+
+End Function
+
+Private Function PiValue() As Double
+
+    PiValue = 4# * Atn(1#)
+
+End Function
+
+Private Function FormatDim(v As Double) As String
+
+    v = Round(v, 1)
+
+    If Abs(v - Int(v)) < 0.0001 Then
+
+        FormatDim = CStr(Int(v))
+
+    Else
+
+        FormatDim = Replace(CStr(v), ",", ".")
+
+    End If
+
+End Function
+
+Private Function FindCutItem(key As String) As Long
+
+    Dim i As Long
+
+    For i = 1 To CUT_Count
+
+        If CUTLIST(i).key = key Then
+
+            FindCutItem = i
+
+            Exit Function
+
+        End If
+
+    Next i
+
+End Function
+
+Private Function AppendUniqueRef(existingRefs As String, refText As String) As String
+
+    If InStr(1, existingRefs, refText, vbTextCompare) > 0 Then
+
+        AppendUniqueRef = existingRefs
+
+    ElseIf Len(existingRefs) = 0 Then
+
+        AppendUniqueRef = refText
+
+    Else
+
+        AppendUniqueRef = existingRefs & "; " & refText
+
+    End If
+
+End Function
+
+Private Sub SortCutList()
+
+    Dim i As Long, j As Long
+
+    Dim t As CutItem
+
+    For i = 1 To CUT_Count - 1
+
+        For j = i + 1 To CUT_Count
+
+            If CompareCutItems(CUTLIST(i), CUTLIST(j)) > 0 Then
+
+                t = CUTLIST(i)
+
+                CUTLIST(i) = CUTLIST(j)
+
+                CUTLIST(j) = t
+
+            End If
+
+        Next j
+
+    Next i
+
+End Sub
+
+Private Function CompareCutItems(a As CutItem, b As CutItem) As Integer
+
+    If a.Profile <> b.Profile Then
+
+        CompareCutItems = Sgn(StrComp(a.Profile, b.Profile, vbTextCompare))
+
+        Exit Function
+
+    End If
+
+    If a.Length <> b.Length Then CompareCutItems = Sgn(b.Length - a.Length): Exit Function
+
+    CompareCutItems = Sgn(StrComp(a.EndA & a.EndB, b.EndA & b.EndB, vbTextCompare))
+
+End Function
+
+Private Function WriteSixMeterCutPlan(ws As Object, startRow As Long) As Long
+
+    Dim row As Long
+
+    row = startRow
+
+    If CUT_Count <= 0 Then
+
+        WriteSixMeterCutPlan = row
+
+        Exit Function
+
+    End If
+
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Merge
+    ws.Cells(row, 1) = BomText("stockPlanTitle") & " (" & _
+                       FormatDim(STOCK_LENGTH_MM) & " mm " & BomText("barUnit") & ", " & _
+                       FormatDim(SAW_KERF_MM) & " mm " & BomText("sawKerf") & ")"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Font.Size = 12
+    row = row + 1
+
+    ws.Cells(row, 1) = BomText("profile")
+    ws.Cells(row, 2) = BomText("bar6m")
+    ws.Cells(row, 3) = BomText("piecesToCut")
+    ws.Cells(row, 4) = BomText("used")
+    ws.Cells(row, 5) = BomText("remaining")
+    ws.Cells(row, 6) = BomText("sawKerf")
+    ws.Cells(row, 7) = BomText("notes")
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Font.Bold = True
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Interior.Color = RGB(226, 239, 218)
+
+    Dim tableStart As Long
+
+    tableStart = row
+    row = row + 1
+
+    Dim dictProfiles As Object
+
+    Set dictProfiles = CreateObject("Scripting.Dictionary")
+
+    Dim i As Long
+
+    For i = 1 To CUT_Count
+
+        If VisibleCutQty(CUTLIST(i).Qty, CUTLIST(i).HiddenQty) > 0 Then
+
+            If Not dictProfiles.Exists(CUTLIST(i).Profile) Then dictProfiles.Add CUTLIST(i).Profile, True
+
+        End If
+
+    Next i
+
+    Dim profile As Variant
+
+    For Each profile In dictProfiles.Keys
+
+        WriteStockPlanForProfile ws, row, CStr(profile)
+
+    Next profile
+
+    If row > tableStart + 1 Then
+
+        Dim rng As Object
+
+        Set rng = ws.Range(ws.Cells(tableStart, 1), ws.Cells(row - 1, 7))
+        rng.Borders.LineStyle = 1
+        rng.Borders.Weight = 2
+        rng.VerticalAlignment = -4160
+        rng.WrapText = True
+        ws.Columns("C:C").ColumnWidth = 48
+        ws.Columns("F:F").ColumnWidth = 12
+        ws.Columns("G:G").ColumnWidth = 28
+
+    End If
+
+    WriteSixMeterCutPlan = row
+
+End Function
+
+Private Function VisibleCutQty(totalQty As Long, hiddenQty As Long) As Long
+
+    VisibleCutQty = totalQty - hiddenQty
+
+    If VisibleCutQty < 0 Then VisibleCutQty = 0
+
+End Function
+
+Private Function ScaledStockLen(valueMm As Double) As Long
+
+    Dim scaled As Double
+
+    scaled = valueMm * STOCK_DP_SCALE
+    ScaledStockLen = CLng(Int(scaled))
+
+    If scaled - ScaledStockLen > 0.000001 Then ScaledStockLen = ScaledStockLen + 1
+
+End Function
+
+Private Function FirstOversizedUnused(pieceLen() As Double, pieceUsed() As Boolean, count As Long) As Long
+
+    Dim i As Long
+
+    For i = 1 To count
+
+        If Not pieceUsed(i) Then
+
+            If pieceLen(i) > STOCK_LENGTH_MM Then
+
+                FirstOversizedUnused = i
+                Exit Function
+
+            End If
+
+        End If
+
+    Next i
+
+End Function
+
+Private Sub PickBestStockSubset(pieceLen() As Double, pieceUsed() As Boolean, count As Long, _
+                                ByRef selected() As Boolean, ByRef selectedCount As Long)
+
+    Dim capacity As Long
+
+    selectedCount = 0
+    capacity = ScaledStockLen(STOCK_LENGTH_MM + SAW_KERF_MM)
+
+    ReDim selected(1 To count)
+
+    Dim idxMap() As Long
+    Dim weight() As Long
+    Dim remCount As Long
+    Dim i As Long
+    Dim c As Long
+
+    ReDim idxMap(1 To count)
+    ReDim weight(1 To count)
+
+    For i = 1 To count
+
+        If Not pieceUsed(i) Then
+
+            remCount = remCount + 1
+            idxMap(remCount) = i
+            weight(remCount) = ScaledStockLen(pieceLen(i) + SAW_KERF_MM)
+
+        End If
+
+    Next i
+
+    If remCount <= 0 Then Exit Sub
+
+    Dim reachable() As Byte
+    Dim keep() As Byte
+
+    ReDim reachable(0 To capacity)
+    ReDim keep(1 To remCount, 0 To capacity)
+
+    reachable(0) = 1
+
+    For i = 1 To remCount
+
+        If weight(i) <= capacity Then
+
+            For c = capacity - weight(i) To 0 Step -1
+
+                If reachable(c) <> 0 And reachable(c + weight(i)) = 0 Then
+
+                    reachable(c + weight(i)) = 1
+                    keep(i, c + weight(i)) = 1
+
+                End If
+
+            Next c
+
+        End If
+
+    Next i
+
+    Dim bestCap As Long
+
+    For c = capacity To 1 Step -1
+
+        If reachable(c) <> 0 Then
+
+            bestCap = c
+            Exit For
+
+        End If
+
+    Next c
+
+    If bestCap <= 0 Then
+
+        For i = 1 To remCount
+
+            If weight(i) <= capacity Then
+
+                selected(idxMap(i)) = True
+                selectedCount = 1
+                Exit Sub
+
+            End If
+
+        Next i
+
+        Exit Sub
+
+    End If
+
+    Dim curCap As Long
+
+    curCap = bestCap
+
+    For i = remCount To 1 Step -1
+
+        If curCap >= 0 Then
+
+            If keep(i, curCap) <> 0 Then
+
+                selected(idxMap(i)) = True
+                selectedCount = selectedCount + 1
+                curCap = curCap - weight(i)
+
+            End If
+
+        End If
+
+    Next i
+
+End Sub
+
+Private Sub WriteStockPlanForProfile(ws As Object, ByRef row As Long, profile As String)
+
+    Dim totalQty As Long
+    Dim totalHidden As Long
+    Dim totalLen As Double
+    Dim totalKerf As Double
+    Dim i As Long
+    Dim visibleQty As Long
+
+    For i = 1 To CUT_Count
+
+        If CUTLIST(i).Profile = profile Then
+
+            visibleQty = VisibleCutQty(CUTLIST(i).Qty, CUTLIST(i).HiddenQty)
+
+            totalQty = totalQty + visibleQty
+            totalHidden = totalHidden + CUTLIST(i).HiddenQty
+            totalLen = totalLen + CUTLIST(i).Length * visibleQty
+
+        End If
+
+    Next i
+
+    If totalQty <= 0 Then Exit Sub
+
+    Dim pieceLen() As Double
+    Dim pieceText() As String
+    Dim p As Long
+
+    ReDim pieceLen(1 To totalQty)
+    ReDim pieceText(1 To totalQty)
+
+    For i = 1 To CUT_Count
+
+        If CUTLIST(i).Profile = profile Then
+
+            Dim q As Long
+
+            visibleQty = VisibleCutQty(CUTLIST(i).Qty, CUTLIST(i).HiddenQty)
+
+            For q = 1 To visibleQty
+
+                p = p + 1
+                pieceLen(p) = CUTLIST(i).Length
+                pieceText(p) = CutPieceText(CUTLIST(i))
+
+            Next q
+
+        End If
+
+    Next i
+
+    SortCutPiecesDescending pieceLen, pieceText, totalQty
+
+    Dim barUsed() As Double
+    Dim barText() As String
+    Dim barCountPieces() As Long
+    Dim barNote() As String
+    Dim barCount As Long
+
+    ReDim barUsed(1 To totalQty)
+    ReDim barText(1 To totalQty)
+    ReDim barCountPieces(1 To totalQty)
+    ReDim barNote(1 To totalQty)
+    Dim barKerf() As Double
+
+    ReDim barKerf(1 To totalQty)
+
+    Dim b As Long
+    Dim remaining As Long
+    Dim pieceUsed() As Boolean
+
+    ReDim pieceUsed(1 To totalQty)
+
+    remaining = totalQty
+
+    Do While remaining > 0
+
+        barCount = barCount + 1
+
+        Dim overIndex As Long
+
+        overIndex = FirstOversizedUnused(pieceLen, pieceUsed, totalQty)
+
+        If overIndex > 0 Then
+
+            barUsed(barCount) = pieceLen(overIndex)
+            barText(barCount) = pieceText(overIndex)
+            barCountPieces(barCount) = 1
+            barNote(barCount) = "Hosszabb mint 6000 mm"
+            pieceUsed(overIndex) = True
+            remaining = remaining - 1
+
+        Else
+
+            Dim selected() As Boolean
+            Dim selectedCount As Long
+
+            selectedCount = 0
+            PickBestStockSubset pieceLen, pieceUsed, totalQty, selected, selectedCount
+
+            If selectedCount <= 0 Then
+
+                barCount = barCount - 1
+                Exit Do
+
+            End If
+
+            For p = 1 To totalQty
+
+                If selected(p) Then
+
+                    If barCountPieces(barCount) > 0 Then
+
+                        barUsed(barCount) = barUsed(barCount) + SAW_KERF_MM
+                        barKerf(barCount) = barKerf(barCount) + SAW_KERF_MM
+
+                    End If
+
+                    AddPieceToBar barText(barCount), pieceText(p)
+                    barUsed(barCount) = barUsed(barCount) + pieceLen(p)
+                    barCountPieces(barCount) = barCountPieces(barCount) + 1
+                    pieceUsed(p) = True
+                    remaining = remaining - 1
+
+                End If
+
+            Next p
+
+        End If
+
+    Loop
+
+    Dim totalLeftover As Double
+
+    For b = 1 To barCount
+
+        totalKerf = totalKerf + barKerf(b)
+
+    Next b
+
+    totalLeftover = barCount * STOCK_LENGTH_MM - totalLen - totalKerf
+
+    ws.Range(ws.Cells(row, 1), ws.Cells(row, 7)).Merge
+    ws.Cells(row, 1) = BomText("profile") & ": " & profile & _
+                       "   " & BomText("visibleQty") & ": " & CStr(totalQty) & _
+                       "   " & BomText("hiddenSkipped") & ": " & CStr(totalHidden) & _
+                       "   6 m " & BomText("barUnit") & ": " & CStr(barCount) & _
+                       "   " & BomText("totalRemaining") & ": " & _
+                       FormatDim(totalLeftover) & " mm"
+    ws.Cells(row, 1).Font.Bold = True
+    ws.Cells(row, 1).Interior.Color = RGB(235, 241, 222)
+    row = row + 1
+
+    For b = 1 To barCount
+
+        ws.Cells(row, 1) = profile
+        ws.Cells(row, 2) = CStr(b) & ". " & BomText("barUnit")
+        ws.Cells(row, 3) = barText(b)
+        ws.Cells(row, 4) = FormatDim(barUsed(b)) & "mm"
+        ws.Cells(row, 5) = FormatDim(STOCK_LENGTH_MM - barUsed(b)) & "mm"
+        ws.Cells(row, 6) = FormatDim(barKerf(b)) & "mm"
+        ws.Cells(row, 7) = barNote(b)
+
+        If barCountPieces(b) > 1 Then
+
+            ws.Rows(row).RowHeight = 15 * barCountPieces(b)
+
+        Else
+
+            ws.Rows(row).RowHeight = 18
+
+        End If
+
+        row = row + 1
+
+    Next b
+
+    row = row + 1
+
+End Sub
+
+Private Function CutPieceText(item As CutItem) As String
+
+    CutPieceText = "1x" & FormatDim(item.Length) & "mm"
+
+    If item.EndA <> "Der" & ChrW(233) & "ksz" & ChrW(246) & "g" Or _
+       item.EndB <> "Der" & ChrW(233) & "ksz" & ChrW(246) & "g" Then
+
+        CutPieceText = CutPieceText & " (A=" & item.EndA & ", B=" & item.EndB & ")"
+
+    End If
+
+End Function
+
+Private Sub SortCutPiecesDescending(pieceLen() As Double, pieceText() As String, count As Long)
+
+    Dim i As Long
+    Dim j As Long
+
+    For i = 1 To count - 1
+
+        For j = i + 1 To count
+
+            If pieceLen(j) > pieceLen(i) Then
+
+                Dim tmpLen As Double
+                Dim tmpText As String
+
+                tmpLen = pieceLen(i)
+                tmpText = pieceText(i)
+                pieceLen(i) = pieceLen(j)
+                pieceText(i) = pieceText(j)
+                pieceLen(j) = tmpLen
+                pieceText(j) = tmpText
+
+            End If
+
+        Next j
+
+    Next i
+
+End Sub
+
+Private Sub AddPieceToBar(ByRef barText As String, pieceText As String)
+
+    If Len(barText) > 0 Then
+
+        barText = barText & Chr(10) & pieceText
+
+    Else
+
+        barText = pieceText
+
+    End If
+
+End Sub
+
+Private Sub ExportCutListToExcel(folder As String, assemblyImgPath As String)
+
+    Dim xlApp As Object
+
+    Set xlApp = CreateObject("Excel.Application")
+
+    xlApp.DisplayAlerts = False
+
+    Dim wb As Object
+
+    Set wb = xlApp.Workbooks.Add
+
+    Dim ws As Object
+
+    Set ws = wb.Sheets(1)
+
+    ws.Name = BomText("cutSheetName")
+
+    ws.Cells.Font.Name = "Arial"
+
+    ws.Cells.Font.Size = 8
+
+    ws.Cells(1, 1) = BomText("profile")
+
+    ws.Cells(1, 2) = BomText("length")
+
+    ws.Cells(1, 3) = BomText("qty")
+
+    ws.Cells(1, 4) = BomText("hiddenQty")
+
+    ws.Cells(1, 5) = BomText("endA")
+
+    ws.Cells(1, 6) = BomText("endB")
+
+    ws.Cells(1, 7) = BomText("orientation")
+
+    ws.Cells(1, 8) = BomText("partConfig")
+
+    ws.Cells(1, 9) = BomText("bbox")
+
+    Dim i As Long
+
+    For i = 1 To CUT_Count
+
+        ws.Cells(i + 1, 1) = CUTLIST(i).Profile
+
+        ws.Cells(i + 1, 2) = Round(CUTLIST(i).Length, 1)
+
+        ws.Cells(i + 1, 3) = CUTLIST(i).Qty
+
+        ws.Cells(i + 1, 4) = CUTLIST(i).HiddenQty
+
+        ws.Cells(i + 1, 5) = CUTLIST(i).EndA
+
+        ws.Cells(i + 1, 6) = CUTLIST(i).EndB
+
+        ws.Cells(i + 1, 7) = CUTLIST(i).Orientation
+
+        ws.Cells(i + 1, 8) = CUTLIST(i).Refs
+
+        ws.Cells(i + 1, 9) = CUTLIST(i).BoundingBox
+
+        ws.Rows(i + 1).RowHeight = 18
+
+    Next i
+
+    Dim tableRng As Object
+
+    Set tableRng = ws.Range("A1:I" & CStr(CUT_Count + 1))
+
+    ws.Range("A1:I1").Font.Bold = True
+
+    ws.Range("A1:I1").Interior.Color = RGB(220, 230, 241)
+
+    tableRng.VerticalAlignment = -4160
+
+    tableRng.Borders.LineStyle = 1
+
+    tableRng.Borders.Weight = 2
+
+    tableRng.WrapText = False
+
+    If CUT_Count > 0 Then ws.Range("A1:I" & CStr(CUT_Count + 1)).AutoFilter
+
+    ws.Columns("A:I").AutoFit
+
+    EnsureColumnBlockWidth ws, 1, 3, 260, 3
+
+    EnsureColumnBlockWidth ws, 4, 6, 260, 6
+
+    ws.Rows("1:" & CStr(CUT_Count + 1)).RowHeight = 15
+
+    ws.Columns("A:I").HorizontalAlignment = -4131
+
+    ws.Columns("B:D").HorizontalAlignment = -4108
+
+    On Error Resume Next
+
+    ws.Application.ActiveWindow.SplitRow = 1
+
+    ws.Application.ActiveWindow.FreezePanes = True
+
+    On Error GoTo 0
+
+
+    Dim stockPlanStartRow As Long
+
+    stockPlanStartRow = CUT_Count + 4
+
+    Dim stockPlanEndRow As Long
+
+    stockPlanEndRow = WriteSixMeterCutPlan(ws, stockPlanStartRow)
+
+    Dim imageStartRow As Long
+
+    imageStartRow = stockPlanEndRow + 3
+
+    Dim imageCount As Long
+
+    imageCount = 0
+
+    Dim imageRow As Long
+
+    imageRow = imageStartRow + 1
+
+    Dim imageCol As Long
+
+    Dim r As Long
+
+    Dim labelText As String
+
+    Dim tableRight As Double
+
+    tableRight = ws.Cells(1, 9).Left + ws.Cells(1, 9).Width
+
+    Dim lastImageRow As Long
+
+    lastImageRow = imageStartRow
+
+    For i = 1 To CUT_Count
+
+        If CutItemNeedsImage(CUTLIST(i).EndA, CUTLIST(i).EndB) Then
+
+        If imageCount = 0 Then
+
+            ws.Cells(imageStartRow, 1) = BomText("angledEnds")
+
+            ws.Cells(imageStartRow, 1).Font.Bold = True
+
+            ws.Cells(imageStartRow, 1).Font.Size = 12
+
+        End If
+
+        If (imageCount Mod 2) = 0 Then
+
+            imageCol = 1
+
+        Else
+
+            imageCol = 4
+
+        End If
+
+        For r = imageRow To imageRow + 12
+
+            ws.Rows(r).RowHeight = 18
+
+        Next r
+
+        labelText = CStr(i) & ". " & CUTLIST(i).Profile & _
+                    "  H=" & FormatDim(CUTLIST(i).Length) & _
+                    "  Db=" & CStr(CUTLIST(i).Qty) & vbLf & _
+                    "A=" & CUTLIST(i).EndA & "   B=" & CUTLIST(i).EndB
+
+        ws.Range(ws.Cells(imageRow, imageCol), ws.Cells(imageRow, imageCol + 2)).Merge
+
+        ws.Range(ws.Cells(imageRow + 1, imageCol), ws.Cells(imageRow + 1, imageCol + 2)).Merge
+
+        ws.Cells(imageRow, imageCol) = labelText
+
+        ws.Cells(imageRow + 1, imageCol) = CUTLIST(i).Refs
+
+        ws.Rows(imageRow).RowHeight = 24
+
+        ws.Rows(imageRow + 1).RowHeight = 12
+
+        ws.Range(ws.Cells(imageRow, imageCol), ws.Cells(imageRow, imageCol + 2)).Font.Bold = True
+
+        ws.Range(ws.Cells(imageRow, imageCol), ws.Cells(imageRow + 1, imageCol + 2)).Font.Size = 7
+
+        ws.Range(ws.Cells(imageRow, imageCol), ws.Cells(imageRow, imageCol + 2)).WrapText = True
+
+        ws.Range(ws.Cells(imageRow + 1, imageCol), ws.Cells(imageRow + 1, imageCol + 2)).WrapText = False
+
+        Dim thumbPath As String
+
+        thumbPath = folder & "~cut_thumb_" & CStr(i) & ".png"
+
+        If SaveCutItemThumbnail(CUTLIST(i).PartPath, CUTLIST(i).ConfigName, thumbPath) Then
+
+            Dim thumbW As Double
+
+            Dim thumbH As Double
+
+            thumbW = ws.Cells(imageRow + 2, imageCol + 3).Left - _
+                     ws.Cells(imageRow + 2, imageCol).Left
+
+            thumbH = thumbW * 0.66
+
+            ws.Shapes.AddPicture thumbPath, False, True, _
+                ws.Cells(imageRow + 2, imageCol).Left, ws.Cells(imageRow + 2, imageCol).Top, thumbW, thumbH
+
+            On Error Resume Next
+
+            Kill thumbPath
+
+            On Error GoTo 0
+
+        End If
+
+        imageCount = imageCount + 1
+
+        If imageRow + 12 > lastImageRow Then lastImageRow = imageRow + 12
+
+        If (imageCount Mod 2) = 0 Then imageRow = imageRow + 13
+
+        End If
+
+    Next i
+
+    If Len(assemblyImgPath) > 0 And Dir(assemblyImgPath) <> "" Then
+
+        Dim assyLeft As Double
+
+        Dim assyTop As Double
+
+        Dim assyW As Double
+
+        Dim assyH As Double
+
+        assyLeft = ws.Cells(imageStartRow + 3, 7).Left
+
+        assyTop = ws.Cells(imageStartRow + 3, 7).Top
+
+        assyW = tableRight - assyLeft
+
+        If assyW < 180 Then
+
+            ws.Columns("G:G").ColumnWidth = ws.Columns("G:G").ColumnWidth + 12
+
+            tableRight = ws.Cells(1, 9).Left + ws.Cells(1, 9).Width
+
+            assyLeft = ws.Cells(imageStartRow + 3, 7).Left
+
+            assyW = tableRight - assyLeft
+
+        End If
+
+        assyH = assyW * 1.45
+
+        If assyH < 320 Then assyH = 320
+
+        If assyH > 460 Then assyH = 460
+
+        ws.Shapes.AddPicture assemblyImgPath, False, True, _
+            assyLeft, assyTop, assyW, assyH
+
+        Dim assyEndRow As Long
+
+        assyEndRow = imageStartRow + 3 + CLng(assyH / 18) + 2
+
+        If assyEndRow > lastImageRow Then lastImageRow = assyEndRow
+
+    End If
+
+    If lastImageRow < CUT_Count + 1 Then lastImageRow = CUT_Count + 1
+
+    ws.PageSetup.PrintArea = ws.Range(ws.Cells(1, 1), ws.Cells(lastImageRow, 9)).Address
+
+    With ws.PageSetup
+
+        .Orientation = 2
+
+        .Zoom = False
+
+        .FitToPagesWide = 1
+
+        .FitToPagesTall = False
+
+        .LeftMargin = xlApp.CentimetersToPoints(0.8)
+
+        .RightMargin = xlApp.CentimetersToPoints(0.8)
+
+        .TopMargin = xlApp.CentimetersToPoints(0.8)
+
+        .BottomMargin = xlApp.CentimetersToPoints(0.8)
+
+    End With
+
+    SaveWorkbookWithFallback wb, folder, "CutList.xlsx"
+
+    wb.Close False
+
+    xlApp.Quit
+
+    On Error Resume Next
+
+    If Len(assemblyImgPath) > 0 Then Kill assemblyImgPath
+
+    On Error GoTo 0
+
+End Sub
+
+Private Sub EnsureColumnBlockWidth(ws As Object, firstCol As Long, lastCol As Long, _
+                                   minPoints As Double, growCol As Long)
+
+    Dim guard As Long
+
+    For guard = 1 To 40
+
+        Dim blockW As Double
+
+        blockW = ws.Cells(1, lastCol + 1).Left - ws.Cells(1, firstCol).Left
+
+        If blockW >= minPoints Then Exit For
+
+        ws.Columns(growCol).ColumnWidth = ws.Columns(growCol).ColumnWidth + 2
+
+    Next guard
+
+End Sub
+
+Private Function SaveWorkbookWithFallback(wb As Object, folder As String, fileName As String) As String
+
+    Dim targetPath As String
+
+    targetPath = folder & fileName
+
+    On Error Resume Next
+
+    Err.Clear
+
+    wb.SaveAs targetPath
+
+    If Err.Number = 0 Then
+
+        SaveWorkbookWithFallback = targetPath
+
+        On Error GoTo 0
+
+        Exit Function
+
+    End If
+
+    Err.Clear
+
+    Dim dotPos As Long
+
+    dotPos = InStrRev(fileName, ".")
+
+    Dim baseName As String
+
+    Dim extName As String
+
+    If dotPos > 0 Then
+
+        baseName = Left(fileName, dotPos - 1)
+
+        extName = Mid(fileName, dotPos)
+
+    Else
+
+        baseName = fileName
+
+        extName = ".xlsx"
+
+    End If
+
+    targetPath = folder & baseName & "_" & Format(Now, "yyyymmdd_hhnnss") & extName
+
+    wb.SaveAs targetPath
+
+    If Err.Number = 0 Then
+
+        SaveWorkbookWithFallback = targetPath
+
+        MsgBox fileName & " " & BomText("saveFallbackOpen") & vbCrLf & _
+               BomText("savedTo") & " " & targetPath, vbInformation, BomText("excelSave")
+
+    Else
+
+        MsgBox BomText("saveFailed") & vbCrLf & _
+               targetPath & vbCrLf & CStr(Err.Description), vbExclamation, BomText("excelSave")
+
+    End If
+
+    On Error GoTo 0
+
+End Function
+
+Private Function CutItemNeedsImage(endA As String, endB As String) As Boolean
+
+    CutItemNeedsImage = (IsMiterText(endA) Or IsMiterText(endB))
+
+End Function
+
+Private Function IsMiterText(value As String) As Boolean
+
+    IsMiterText = (InStr(1, value, ChrW(176), vbBinaryCompare) > 0 Or _
+                   InStr(1, value, "deg", vbTextCompare) > 0)
+
+End Function
+
+Private Function SaveCutItemThumbnail(partPath As String, configName As String, imgPath As String) As Boolean
+
+    If Len(partPath) = 0 Then Exit Function
+
+    Dim oldDoc As Object
+
+    Set oldDoc = swApp.ActiveDoc
+
+    Dim swPart As Object
+
+    Set swPart = Nothing
+
+    On Error Resume Next
+
+    Set swPart = swApp.GetOpenDocumentByName(partPath)
+
+    On Error GoTo 0
+
+    Dim openedHere As Boolean
+
+    If swPart Is Nothing Then
+
+        Dim errs As Long
+
+        Dim warns As Long
+
+        On Error Resume Next
+
+        Set swPart = swApp.OpenDoc6(partPath, swDocPART, swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, configName, errs, warns)
+
+        openedHere = Not swPart Is Nothing
+
+        On Error GoTo 0
+
+    End If
+
+    If swPart Is Nothing Then Exit Function
+
+    Dim oldConfigName As String
+
+    ActivatePartConfig swPart, configName, oldConfigName
+
+    On Error Resume Next
+
+    Dim actErr As Long
+
+    swApp.ActivateDoc3 swPart.GetTitle, False, 0, actErr
+
+    swPart.ShowNamedView2 "*Isometric", swIsometricView
+
+    swPart.ViewZoomtofit2
+
+    DeleteFileIfExists imgPath
+
+    Dim saveErr As Long
+
+    Dim saveWarn As Long
+
+    swPart.Extension.SaveAs imgPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, saveErr, saveWarn
+
+    SaveCutItemThumbnail = (Dir(imgPath) <> "")
+
+    RestorePartConfig swPart, oldConfigName
+
+    If openedHere Then swApp.CloseDoc swPart.GetTitle
+
+    If Not oldDoc Is Nothing Then swApp.ActivateDoc3 oldDoc.GetTitle, False, 0, actErr
+
+    On Error GoTo 0
+
+End Function
+
+Private Sub DeleteFileIfExists(filePath As String)
+
+    On Error Resume Next
+
+    If Len(filePath) > 0 And Dir(filePath) <> "" Then Kill filePath
+
+    On Error GoTo 0
+
+End Sub
+
+
+
+' CONFIG + BOUNDING BOX
+
+' ===============================
+
+Private Function ActivatePartConfig(swPart As Object, configName As String, _
+                                    ByRef oldConfigName As String) As Boolean
+
+    On Error Resume Next
+
+    oldConfigName = swPart.ConfigurationManager.ActiveConfiguration.name
+
+    Err.Clear
+
+    If Len(configName) > 0 Then
+
+        If LCase(oldConfigName) <> LCase(configName) Then
+
+            ActivatePartConfig = swPart.ShowConfiguration2(configName)
+
+        Else
+
+            ActivatePartConfig = True
+
+        End If
+
+    Else
+
+        ActivatePartConfig = True
+
+    End If
+
+    swPart.ForceRebuild3 False
+
+    swPart.EditRebuild3
+
+    If Err.Number <> 0 Then
+
+        Err.Clear
+
+        ActivatePartConfig = False
+
+    End If
+
+    On Error GoTo 0
+
+End Function
+
+Private Sub RestorePartConfig(swPart As Object, oldConfigName As String)
+
+    If Len(oldConfigName) = 0 Then Exit Sub
+
+    On Error Resume Next
+
+    If LCase(swPart.ConfigurationManager.ActiveConfiguration.name) <> LCase(oldConfigName) Then
+
+        swPart.ShowConfiguration2 oldConfigName
+
+        swPart.EditRebuild3
+
+    End If
+
+    On Error GoTo 0
+
+End Sub
+
+Private Function GetAccuratePartBox(swPart As Object) As Variant
+
+    Dim vBodies As Variant
+
+    vBodies = swPart.GetBodies2(swSolidBody, True)
+
+    If Not IsEmpty(vBodies) Then
+
+        Dim minX As Double, minY As Double, minZ As Double
+
+        Dim maxX As Double, maxY As Double, maxZ As Double
+
+        minX = 1E+30: minY = 1E+30: minZ = 1E+30
+
+        maxX = -1E+30: maxY = -1E+30: maxZ = -1E+30
+
+        Dim foundBox As Boolean
+
+        Dim i As Long
+
+        For i = 0 To UBound(vBodies)
+
+            Dim swBody As Object
+
+            Set swBody = vBodies(i)
+
+            If Not swBody Is Nothing Then
+
+                Dim b As Variant
+
+                b = swBody.GetBodyBox
+
+                If Not IsEmpty(b) Then
+
+                    If b(0) < minX Then minX = b(0)
+
+                    If b(1) < minY Then minY = b(1)
+
+                    If b(2) < minZ Then minZ = b(2)
+
+                    If b(3) > maxX Then maxX = b(3)
+
+                    If b(4) > maxY Then maxY = b(4)
+
+                    If b(5) > maxZ Then maxZ = b(5)
+
+                    foundBox = True
+
+                End If
+
+            End If
+
+        Next i
+
+        If foundBox Then
+
+            Dim result(5) As Double
+
+            result(0) = minX
+
+            result(1) = minY
+
+            result(2) = minZ
+
+            result(3) = maxX
+
+            result(4) = maxY
+
+            result(5) = maxZ
+
+            GetAccuratePartBox = result
+
+            Exit Function
+
+        End If
+
+    End If
+
+    On Error Resume Next
+
+    GetAccuratePartBox = swPart.GetPartBox(False)
+
+    If IsEmpty(GetAccuratePartBox) Then GetAccuratePartBox = swPart.GetPartBox(True)
+
+    On Error GoTo 0
+
+End Function
+
+
+
+' SHEET METAL DETECTION
+' ===============================
+
+Private Function IsSheetMetalPart(swPart As Object) As Boolean
+
+
+    Dim swFeat As Object
+
+    Set swFeat = swPart.FirstFeature
+
+    
+
+    While Not swFeat Is Nothing
+
+        
+
+        Dim name As String
+
+        name = swFeat.GetTypeName2
+
+        
+
+        If name = "SheetMetal" Or name = "FlatPattern" Then
+
+            IsSheetMetalPart = True
+
+            Exit Function
+
+        End If
+
+        
+
+        Set swFeat = swFeat.GetNextFeature
+
+    Wend
+
+
+
+End Function
+
+
+
+' ===============================
+
+' FIND ITEM
+
+' ===============================
+
+Private Function FindItem(key As String) As Long
+
+
+    Dim i As Long
+
+    
+
+    For i = 1 To BOM_Count
+
+        If BOM(i).key = key Then
+
+            FindItem = i
+
+            Exit Function
+
+        End If
+
+    Next i
+
+    
+
+    FindItem = 0
+
+
+
+End Function
+
+
+
+' ===============================
+
+' DIAMETER
+
+' ===============================
+
+Private Function GetDetectedDiameter(swPart As Object) As Double
+
+
+    Dim maxDia As Double
+
+    Dim vBodies As Variant
+
+    
+
+    vBodies = swPart.GetBodies2(swSolidBody, True)
+
+    If IsEmpty(vBodies) Then Exit Function
+
+    
+
+    Dim i As Long, j As Long
+
+    
+
+    For i = 0 To UBound(vBodies)
+
+        
+
+        Dim swBody As Object
+
+        Set swBody = vBodies(i)
+
+        
+
+        Dim vFaces As Variant
+
+        vFaces = swBody.GetFaces
+
+        
+
+        If IsEmpty(vFaces) Then GoTo NextBody
+
+        
+
+        For j = 0 To UBound(vFaces)
+
+            
+
+            Dim swFace As Object
+
+            Set swFace = vFaces(j)
+
+            
+
+            Dim swSurf As Object
+
+            Set swSurf = swFace.GetSurface
+
+            
+
+            If swSurf.IsCylinder Then
+
+                
+
+                Dim p As Variant
+
+                p = swSurf.CylinderParams
+
+                
+
+                Dim dia As Double
+
+                dia = p(6) * 2 * 1000#
+
+                
+
+                If dia > maxDia Then maxDia = dia
+
+                
+
+            End If
+
+            
+
+        Next j
+
+        
+
+NextBody:
+
+    Next i
+
+    
+
+    GetDetectedDiameter = maxDia
+
+
+
+End Function
+
+
+
+' ===============================
+
+' SORT
+
+' ===============================
+
+Private Sub Sort3(arr() As Double)
+
+
+    Dim i As Integer, j As Integer, t As Double
+
+    
+
+    For i = 0 To 1
+
+        For j = i + 1 To 2
+
+            If arr(i) < arr(j) Then
+
+                t = arr(i)
+
+                arr(i) = arr(j)
+
+                arr(j) = t
+
+            End If
+
+        Next j
+
+    Next i
+
+
+
+End Sub
+
+
+
+Private Sub SortBOM()
+
+
+    Dim i As Long, j As Long
+
+    Dim t As BomItem
+
+    
+
+    For i = 1 To BOM_Count - 1
+
+        For j = i + 1 To BOM_Count
+
+            
+
+            If CompareBOM(BOM(i), BOM(j)) > 0 Then
+
+                t = BOM(i)
+
+                BOM(i) = BOM(j)
+
+                BOM(j) = t
+
+            End If
+
+            
+
+        Next j
+
+    Next i
+
+
+
+End Sub
+
+
+
+Private Function CompareBOM(a As BomItem, b As BomItem) As Integer
+
+
+    If a.category = "SHEET" And b.category <> "SHEET" Then
+
+        CompareBOM = 1: Exit Function
+
+    End If
+
+    
+
+    If a.category <> "SHEET" And b.category = "SHEET" Then
+
+        CompareBOM = -1: Exit Function
+
+    End If
+
+
+
+    If a.W <> b.W Then CompareBOM = Sgn(b.W - a.W): Exit Function
+
+    If a.H <> b.H Then CompareBOM = Sgn(b.H - a.H): Exit Function
+
+    If a.L <> b.L Then CompareBOM = Sgn(b.L - a.L): Exit Function
+
+
+
+    CompareBOM = 0
+
+
+
+End Function
+
+
+
+' ===============================
+
+' SNAPSHOT + EXCEL
+
+' ===============================
+
+Private Sub SaveSnapshot(imgPath As String)
+
+
+    Dim swExt As Object
+
+    Set swExt = swModel.Extension
+
+    
+
+    Dim err As Long, warn As Long
+
+    swExt.SaveAs imgPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, err, warn
+
+
+
+End Sub
+
+Private Function ColumnForPoint(ws As Object, pointX As Double, maxCol As Long) As Long
+
+    Dim c As Long
+
+    For c = 1 To maxCol
+
+        If ws.Cells(1, c).Left + ws.Cells(1, c).Width >= pointX Then
+
+            ColumnForPoint = c
+
+            Exit Function
+
+        End If
+
+    Next c
+
+    ColumnForPoint = maxCol
+
+End Function
+
+
+
+Private Sub ExportToExcel(folder As String, imgPath As String)
+
+
+    Dim xlApp As Object
+
+    Set xlApp = CreateObject("Excel.Application")
+
+    xlApp.DisplayAlerts = False
+
+    
+
+    Dim wb As Object
+
+    Set wb = xlApp.Workbooks.Add
+
+    
+
+    Dim ws As Object
+
+    Set ws = wb.Sheets(1)
+
+    ws.Name = "BOM"
+
+    ws.Cells.Font.Name = "Arial"
+
+    ws.Cells.Font.Size = 8
+
+    
+
+    ws.Cells(1, 1) = BomText("part")
+
+    ws.Cells(1, 2) = BomText("config")
+
+    ws.Cells(1, 3) = BomText("bbox")
+
+    ws.Cells(1, 4) = BomText("diameter")
+
+    ws.Cells(1, 5) = BomText("category")
+
+    ws.Cells(1, 6) = BomText("qty")
+
+    ws.Cells(1, 7) = BomText("hiddenQty")
+
+    
+
+    Dim i As Long
+
+    
+
+    For i = 1 To BOM_Count
+
+        ws.Cells(i + 1, 1) = BOM(i).PartName
+
+        ws.Cells(i + 1, 2) = BOM(i).configName
+
+        ws.Cells(i + 1, 3) = BOM(i).BoundingBox
+
+        
+
+        If BOM(i).diameter > 0 Then
+
+            ws.Cells(i + 1, 4) = Round(BOM(i).diameter, 1)
+
+        End If
+
+        
+
+        If UCase(BOM(i).category) = "SHEET" Then
+
+            ws.Cells(i + 1, 5) = BomText("sheetCategory")
+
+        Else
+
+            ws.Cells(i + 1, 5) = BOM(i).category
+
+        End If
+
+        ws.Cells(i + 1, 6) = BOM(i).Qty
+
+        ws.Cells(i + 1, 7) = BOM(i).HiddenQty
+
+    Next i
+
+    Dim tableRng As Object
+
+    Set tableRng = ws.Range("A1:G" & CStr(BOM_Count + 1))
+
+    ws.Range("A1:G1").Font.Bold = True
+
+    ws.Range("A1:G1").Interior.Color = RGB(220, 230, 241)
+
+    tableRng.VerticalAlignment = -4160
+
+    tableRng.Borders.LineStyle = 1
+
+    tableRng.Borders.Weight = 2
+
+    tableRng.WrapText = False
+
+    If BOM_Count > 0 Then ws.Range("A1:G" & CStr(BOM_Count + 1)).AutoFilter
+
+    
+
+    ws.Columns("A:G").AutoFit
+
+    ws.Rows("1:" & CStr(BOM_Count + 1)).RowHeight = 15
+
+    ws.Columns("A:G").HorizontalAlignment = -4131
+
+    ws.Columns("D:G").HorizontalAlignment = -4108
+
+    On Error Resume Next
+
+    ws.Application.ActiveWindow.SplitRow = 1
+
+    ws.Application.ActiveWindow.FreezePanes = True
+
+    On Error GoTo 0
+
+    Dim lastPrintRow As Long
+
+    Dim lastPrintCol As Long
+
+    lastPrintRow = BOM_Count + 1
+
+    lastPrintCol = 7
+
+    
+
+    If Len(imgPath) > 0 And Dir(imgPath) <> "" Then
+
+        Dim pic As Object
+
+        Set pic = ws.Shapes.AddPicture(imgPath, False, True, _
+            ws.Cells(2, 9).Left, ws.Cells(2, 9).Top, 460, 320)
+
+        lastPrintCol = ColumnForPoint(ws, pic.Left + pic.Width, 40)
+
+        If lastPrintRow < 22 Then lastPrintRow = 22
+
+    End If
+
+    ws.PageSetup.PrintArea = ws.Range(ws.Cells(1, 1), ws.Cells(lastPrintRow, lastPrintCol)).Address
+
+    With ws.PageSetup
+
+        .Orientation = 2
+
+        .Zoom = False
+
+        .FitToPagesWide = 1
+
+        .FitToPagesTall = False
+
+        .LeftMargin = xlApp.CentimetersToPoints(0.8)
+
+        .RightMargin = xlApp.CentimetersToPoints(0.8)
+
+        .TopMargin = xlApp.CentimetersToPoints(0.8)
+
+        .BottomMargin = xlApp.CentimetersToPoints(0.8)
+
+    End With
+    
+
+    SaveWorkbookWithFallback wb, folder, "BOM.xlsx"
+
+    wb.Close False
+
+    xlApp.Quit
+
+    
+
+    On Error Resume Next
+
+    Kill imgPath
+
+
+
+End Sub
+

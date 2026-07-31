@@ -1,0 +1,101 @@
+# electron-builder config for Excelsis Helper.
+# Install layout:
+#   resources/app.asar
+#   resources/scripts/**
+#   resources/build/**
+#   resources/macros/**
+# An optional ExcelsisHelper-settings.json beside the installer is copied into
+# resources by installer.nsh. It is deliberately not embedded in the package.
+# The de-elevated app deploys bundled macros to the logged-in user's Documents
+# folder once per version and backs up differing existing source macros.
+appId: local.excelsis.automation
+productName: Excelsis Helper
+artifactName: ${productName}-Setup-${version}.${ext}
+copyright: Excelsis contributors
+
+directories:
+  output: dist
+  buildResources: build
+
+# Swaps the executable icon and strips GPU DLLs unused with hardware
+# acceleration disabled in main.cjs.
+afterPack: scripts/after-pack.cjs
+
+# Production hardening. Cookie encryption and a browser-only V8 snapshot stay
+# off because the app has no cookie-backed sessions and ships one shared
+# snapshot. The renderer is loaded from app.asar with BrowserWindow.loadFile(),
+# so Electron's file-protocol privileges must remain enabled; disabling that
+# fuse makes Electron 42.6.1 reject the packaged HTML with ERR_FILE_NOT_FOUND.
+# Electron 42's ninth WasmTrapHandlers fuse intentionally remains enabled: its
+# guard-page implementation is lighter than explicit bounds checks. The release
+# audit reads all nine slots because the bundled fuse library configures eight.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: true
+
+files:
+  - main.cjs
+  - thumbnail-scheduler.cjs
+  - worklogger-unsaved.cjs
+  - preload.cjs
+  - package.json
+  - automation.html
+  - automation.js
+  - automation.css
+  - machining-engine/**/*
+  - icon-256.png
+  - loading.html
+
+# Node worker_threads needs a real filesystem entrypoint. Keep the engine in
+# the application package, but unpack it beside app.asar so the packaged MPF
+# parser and rewriter can start without duplicating the modules.
+asar:
+  unpack:
+    - machining-engine/**/*
+
+extraResources:
+  - from: scripts
+    to: scripts
+    filter:
+      - "**/*"
+      - "!after-pack.cjs"
+  - from: build
+    to: build
+    filter:
+      - icon.ico
+      - icon-256.png
+  - from: macros
+    to: macros
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: licenses
+    to: licenses
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  electronLanguages:
+    - en-US
+    - hu
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  license: LICENSE
+  include: installer.nsh
+  shortcutName: Excelsis Helper
+  # installer.nsh stages an optional external settings sidecar, then launches
+  # after interactive installs so it can fill missing settings. Silent installs
+  # stage the file but do not launch.
+  runAfterFinish: false

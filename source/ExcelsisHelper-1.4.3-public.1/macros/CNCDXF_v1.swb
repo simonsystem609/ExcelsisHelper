@@ -1,0 +1,916 @@
+Option Explicit
+
+' ============================================================================
+' CNCDXF_v1 - select faces on parts in an assembly, export each face to DXF
+' with a 2mm registration circle stamped at the DXF's bounding-box centre.
+' Output goes to the configured CAM root under <project>\dxf\.
+'
+' Workflow:
+'   1) Open an assembly in SOLIDWORKS.
+'   2) Pre-select one or more planar faces on parts you want machined.
+'   3) Run this macro.
+'
+' Each selected face becomes one DXF. The 2mm circle is added by parsing
+' the DXF after SW writes it: we scan ENTITIES for X/Y coordinates, take
+' min/max, drop a CIRCLE entity at the centre. No sketch is added to the
+' part - no clean-up on the SW side.
+' ============================================================================
+
+Const swDocPART As Long = 1
+Const swDocASSEMBLY As Long = 2
+
+Const swSelFACES As Long = 2
+Const swExportToDWG_ExportSelectedFacesOrLoops As Long = 2
+
+Const REG_CIRCLE_DIAMETER_MM As Double = 2#
+
+' Excelsis Helper synchronizes these values from Settings.
+Const OUTPUT_ROOT As String = "C:\CAM"
+Const PROJECT_PREFIXES As String = ""
+Const PROJECT_ROOT_NAMES As String = "CompanyProjects;ToolingProjects"
+
+' ============================================================================
+
+Dim swApp As Object
+
+Sub main()
+
+    Set swApp = Application.SldWorks
+
+    Dim swModel As Object
+    Set swModel = swApp.ActiveDoc
+    If swModel Is Nothing Then
+        MsgBox "Open an assembly (or part) first.", vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim mType As Long
+    mType = swModel.GetType
+
+    If mType <> swDocASSEMBLY And mType <> swDocPART Then
+        MsgBox "Active document must be an assembly or part.", vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim selMgr As Object
+    Set selMgr = swModel.SelectionManager
+    If selMgr Is Nothing Then
+        MsgBox "Could not access SelectionManager.", vbCritical, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim selCount As Long
+    selCount = selMgr.GetSelectedObjectCount2(-1)
+    If selCount = 0 Then
+        MsgBox "Select one or more planar faces on parts in the assembly first.", _
+               vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    ' Resolve the project folder from optional prefixes or configured roots.
+    Dim docPath As String
+    docPath = swModel.GetPathName
+    If Len(docPath) = 0 Then
+        MsgBox "Save the assembly/part before running CNCDXF " & _
+               "(we need its path to derive the project folder).", _
+               vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim projectName As String
+    projectName = DeriveProjectFolderName(docPath)
+    If Len(projectName) = 0 Then
+        MsgBox "Could not identify a project folder " & _
+               "in the document path:" & vbCrLf & docPath & vbCrLf & _
+               "Configured prefixes: " & PROJECT_PREFIXES & vbCrLf & _
+               "Configured project roots: " & PROJECT_ROOT_NAMES, _
+               vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim outFolder As String
+    outFolder = EnsureTrailingBackslash(OUTPUT_ROOT) & projectName & "\dxf\"
+    If Not EnsureFolder(outFolder) Then
+        MsgBox "Could not create or access output folder:" & vbCrLf & outFolder, _
+               vbCritical, "CNCDXF"
+        Exit Sub
+    End If
+
+    Debug.Print "CNCDXF output folder: " & outFolder
+
+    ' Collect (component, face) pairs from the selection. For part docs
+    ' there's no component - we wrap the part itself.
+    Dim selections As Collection
+    Set selections = New Collection
+
+    Dim i As Long
+    For i = 1 To selCount
+
+        Dim selType As Long
+        selType = selMgr.GetSelectedObjectType3(i, -1)
+        If selType <> swSelFACES Then
+            Debug.Print "  selection " & i & " is not a face (type=" & selType & ") - skipped"
+            GoTo NextSel
+        End If
+
+        Dim swFace As Object
+        Set swFace = selMgr.GetSelectedObject6(i, -1)
+        If swFace Is Nothing Then GoTo NextSel
+
+        Dim swComp As Object
+        Set swComp = Nothing
+        On Error Resume Next
+        Set swComp = selMgr.GetSelectedObjectsComponent4(i, -1)
+        On Error GoTo 0
+
+        Dim entry As Object
+        Set entry = CreateObject("Scripting.Dictionary")
+        entry.Add "face", swFace
+        entry.Add "component", swComp
+        entry.Add "ownerDoc", Nothing
+
+        ' For part docs, the face belongs directly to the active model.
+        If mType = swDocPART Then
+            Set entry("ownerDoc") = swModel
+        ElseIf Not swComp Is Nothing Then
+            Dim swPart As Object
+            Set swPart = Nothing
+            On Error Resume Next
+            Set swPart = swComp.GetModelDoc2
+            On Error GoTo 0
+            Set entry("ownerDoc") = swPart
+        End If
+
+        selections.Add entry
+
+NextSel:
+    Next i
+
+    If selections.Count = 0 Then
+        MsgBox "No planar faces were selected. Pre-select faces and run again.", _
+               vbExclamation, "CNCDXF"
+        Exit Sub
+    End If
+
+    Dim okCount As Long
+    Dim failCount As Long
+    Dim skippedDupes As Long
+    okCount = 0
+    failCount = 0
+    skippedDupes = 0
+
+    Dim failures As String
+    failures = ""
+
+    ' Remember the original active doc so we can return there afterwards.
+    Dim originalActivePath As String
+    originalActivePath = swModel.GetPathName
+
+    ' Dedupe: rule is 1 face per part. If the same part file appears
+    ' more than once in the selection (e.g. faces picked on two
+    ' instances of the same component), we export the FIRST face we
+    ' saw and skip the rest. Two faces on the same part but DIFFERENT
+    ' (i.e. user broke the rule) also collapses to the first - they
+    ' get a clear log entry showing what was skipped.
+    Dim processedPartPaths As Object
+    Set processedPartPaths = CreateObject("Scripting.Dictionary")
+
+    Dim s As Long
+    For s = 1 To selections.Count
+
+        Dim sel As Object
+        Set sel = selections(s)
+
+        Dim ownerDoc As Object
+        Set ownerDoc = sel("ownerDoc")
+        Dim face As Object
+        Set face = sel("face")
+        Dim comp As Object
+        Set comp = sel("component")
+
+        If ownerDoc Is Nothing Then
+            Debug.Print "  [" & s & "] no owner doc - skipping"
+            failCount = failCount + 1
+            failures = failures & "  - face #" & s & ": no owner part" & vbCrLf
+            GoTo NextSelection
+        End If
+
+        Dim partPath As String
+        partPath = ownerDoc.GetPathName
+        If Len(partPath) = 0 Then
+            Debug.Print "  [" & s & "] owner doc not saved - skipping"
+            failCount = failCount + 1
+            failures = failures & "  - face #" & s & ": owner part not saved" & vbCrLf
+            GoTo NextSelection
+        End If
+
+        ' Dedupe by part file: one face per part = one DXF per part.
+        ' Second+ selection on the same part file is a no-op.
+        Dim partKey As String
+        partKey = LCase$(partPath)
+        If processedPartPaths.Exists(partKey) Then
+            Debug.Print "  [" & s & "] " & PathFileName(partPath) & " already exported - skipping duplicate selection"
+            skippedDupes = skippedDupes + 1
+            GoTo NextSelection
+        End If
+        processedPartPaths.Add partKey, True
+
+        Dim cfgName As String
+        cfgName = ""
+        If Not comp Is Nothing Then
+            On Error Resume Next
+            cfgName = comp.ReferencedConfiguration
+            On Error GoTo 0
+        End If
+        If Len(cfgName) = 0 Then cfgName = GetActiveConfigName(ownerDoc)
+
+        Dim outPath As String
+        outPath = BuildDxfPath(outFolder, partPath, cfgName, s)
+        Debug.Print "[" & s & "] export -> " & outPath
+
+        ' Activate the part doc before exporting. ExportToDWG2 is a
+        ' part-doc method and reads from the part's selection manager,
+        ' so we must (a) make the part the active doc, (b) select the
+        ' face inside the part's context. The face entity reference
+        ' captured while the assembly was active is still valid here
+        ' because SOLIDWORKS shares face entities across contexts.
+        Dim activateErrs As Long
+        activateErrs = 0
+        On Error Resume Next
+        swApp.ActivateDoc3 partPath, True, 1, activateErrs
+        On Error GoTo 0
+
+        Dim exportOk As Boolean
+        exportOk = ExportFaceToDxf(ownerDoc, face, outPath)
+
+        If Not exportOk Then
+            Debug.Print "  export failed"
+            failCount = failCount + 1
+            failures = failures & "  - " & PathFileName(partPath) & " (face " & s & "): export failed" & vbCrLf
+            GoTo NextSelection
+        End If
+
+        Dim stampOk As Boolean
+        stampOk = StampRegistrationCircle(outPath, REG_CIRCLE_DIAMETER_MM / 2#)
+        If Not stampOk Then
+            Debug.Print "  stamp failed - DXF kept without registration mark"
+            failures = failures & "  - " & PathFileName(outPath) & ": exported but reg-mark stamp failed" & vbCrLf
+        End If
+
+        okCount = okCount + 1
+
+NextSelection:
+    Next s
+
+    ' Return the user to the assembly they started from.
+    If Len(originalActivePath) > 0 Then
+        Dim returnErrs As Long
+        On Error Resume Next
+        swApp.ActivateDoc3 originalActivePath, True, 1, returnErrs
+        On Error GoTo 0
+    End If
+
+    Dim summary As String
+    summary = "CNCDXF done." & vbCrLf & _
+              "  Exported: " & okCount & vbCrLf & _
+              "  Failed:   " & failCount
+    If skippedDupes > 0 Then
+        summary = summary & vbCrLf & _
+                  "  Skipped:  " & skippedDupes & " (extra faces on parts already exported)"
+    End If
+    summary = summary & vbCrLf & "  Output:   " & outFolder
+    If Len(failures) > 0 Then
+        summary = summary & vbCrLf & vbCrLf & "Failures:" & vbCrLf & failures
+    End If
+    Debug.Print summary
+    MsgBox summary, IIf(failCount = 0, vbInformation, vbExclamation), "CNCDXF"
+
+End Sub
+
+' ============================================================================
+' DXF EXPORT
+' ============================================================================
+
+' Selects the given planar face on its owner part and runs
+' ExportToDWG2 with swExportToDWG_ExportSelectedFacesOrLoops, which
+' projects the face outline to its own plane and writes a 2D DXF.
+Function ExportFaceToDxf(ownerDoc As Object, face As Object, filePath As String) As Boolean
+
+    ExportFaceToDxf = False
+
+    DeleteExistingFile filePath
+
+    ownerDoc.ClearSelection2 True
+
+    Dim selOk As Boolean
+    On Error Resume Next
+    selOk = face.Select4(False, Nothing)
+    If Not selOk Then
+        Err.Clear
+        selOk = face.Select(False)
+    End If
+    On Error GoTo 0
+
+    If Not selOk Then
+        Debug.Print "    could not select face for DXF export"
+        Exit Function
+    End If
+
+    Dim varAlignment As Variant
+    varAlignment = DefaultDwgAlignment()
+
+    Dim ok As Boolean
+    On Error Resume Next
+    ok = ownerDoc.ExportToDWG2( _
+            filePath, ownerDoc.GetPathName, _
+            swExportToDWG_ExportSelectedFacesOrLoops, _
+            True, varAlignment, False, False, 0, Empty)
+    On Error GoTo 0
+
+    ownerDoc.ClearSelection2 True
+
+    ExportFaceToDxf = (ok And Dir(filePath) <> "")
+
+End Function
+
+' Standard alignment vector for face export. Copied from DXF_v16 so
+' both macros produce consistent orientation.
+Function DefaultDwgAlignment() As Variant
+    Dim data(11) As Double
+    data(0) = 0: data(1) = 0: data(2) = 0
+    data(3) = 1: data(4) = 0: data(5) = 0
+    data(6) = 0: data(7) = 1: data(8) = 0
+    data(9) = 0: data(10) = 0: data(11) = 1
+    DefaultDwgAlignment = data
+End Function
+
+' ============================================================================
+' DXF POST-PROCESSING: stamp a registration circle at the bbox centre
+' ============================================================================
+
+' Reads the DXF, scans every entity for X/Y coordinates, computes the
+' bbox of the geometry, then re-writes the file with a CIRCLE entity
+' inserted at the centre right before ENDSEC of the ENTITIES section.
+Function StampRegistrationCircle(filePath As String, radius As Double) As Boolean
+
+    StampRegistrationCircle = False
+
+    Dim fnum As Long
+    fnum = FreeFile
+    Dim text As String
+
+    On Error Resume Next
+    Open filePath For Binary As #fnum
+    If Err.Number <> 0 Then
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    text = Space$(LOF(fnum))
+    Get #fnum, , text
+    Close #fnum
+
+    If Len(text) = 0 Then Exit Function
+
+    Dim minX As Double, minY As Double, maxX As Double, maxY As Double
+    Dim seen As Boolean
+    seen = False
+    minX = 0: minY = 0: maxX = 0: maxY = 0
+
+    If Not ComputeDxfBoundingBox(text, minX, minY, maxX, maxY, seen) Then Exit Function
+    If Not seen Then Exit Function
+
+    Dim cx As Double, cy As Double
+    cx = (minX + maxX) / 2#
+    cy = (minY + maxY) / 2#
+
+    Dim updated As String
+    updated = InsertCircleEntity(text, cx, cy, radius)
+    If Len(updated) = 0 Then Exit Function
+
+    Dim outFnum As Long
+    outFnum = FreeFile
+
+    On Error Resume Next
+    Open filePath For Output As #outFnum
+    If Err.Number <> 0 Then
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    Print #outFnum, updated;
+    Close #outFnum
+
+    StampRegistrationCircle = True
+
+End Function
+
+' Walks the DXF text line-by-line and harvests every X/Y coordinate
+' from each entity. Computes an EXACT bounding box - the previous
+' version approximated arcs as full circles (centre +/- radius), which
+' biased the centroid by up to half the arc's chord depth. This version
+' uses each ARC's start/end angles to find the true extents.
+'
+' DXF group codes used here:
+'   10/20/30 - primary point X/Y/Z (LINE start, ARC/CIRCLE centre,
+'              LWPOLYLINE vertex, ELLIPSE centre)
+'   11/21    - secondary point X/Y (LINE end, ELLIPSE major-axis endpoint)
+'   12/22    - tertiary X/Y (3DFACE third corner)
+'   13/23    - quaternary X/Y (3DFACE fourth corner)
+'   40       - radius for CIRCLE/ARC; flatness for ELLIPSE
+'   50       - start angle for ARC (degrees, CCW from +X axis)
+'   51       - end angle for ARC (degrees, CCW from +X axis)
+Function ComputeDxfBoundingBox(text As String, ByRef minX As Double, ByRef minY As Double, _
+                                ByRef maxX As Double, ByRef maxY As Double, ByRef seen As Boolean) As Boolean
+
+    ComputeDxfBoundingBox = False
+
+    Dim lines() As String
+    lines = SplitDxfLines(text)
+    If (Not Not lines) = 0 Then Exit Function
+
+    Dim n As Long
+    n = UBound(lines)
+
+    ' Per-entity state. We don't flush a point until we have both X (code 10)
+    ' and Y (code 20). For ARC/CIRCLE we accumulate the centre+radius (+arc
+    ' angles) then compute the real bbox on the next 0 (new entity).
+    Dim entityKind As String
+    entityKind = ""
+
+    Dim cx As Double, cy As Double, radius As Double
+    Dim startAng As Double, endAng As Double
+    Dim haveCentre As Boolean, haveRadius As Boolean
+    Dim haveStartAng As Boolean, haveEndAng As Boolean
+    haveCentre = False: haveRadius = False
+    haveStartAng = False: haveEndAng = False
+
+    Dim pendingX As Double      ' last X seen (for 10/11/12/13 codes)
+    Dim pendingXKind As Long    ' 10, 11, 12, 13 - so we know which Y pairs
+
+    Dim i As Long
+    i = 0
+    Do While i < n - 1
+
+        Dim codeLine As String
+        Dim valLine As String
+        codeLine = Trim$(lines(i))
+        valLine = Trim$(lines(i + 1))
+
+        Dim code As Long
+        On Error Resume Next
+        code = CLng(codeLine)
+        If Err.Number <> 0 Then
+            Err.Clear
+            i = i + 1
+            On Error GoTo 0
+            GoTo NextIter
+        End If
+        On Error GoTo 0
+
+        Select Case code
+            Case 0
+                FlushEntity entityKind, haveCentre, haveRadius, _
+                            haveStartAng, haveEndAng, cx, cy, radius, _
+                            startAng, endAng, minX, minY, maxX, maxY, seen
+                entityKind = UCase$(valLine)
+
+            Case 10
+                pendingX = ParseDouble(valLine)
+                pendingXKind = 10
+
+            Case 20
+                Dim y20 As Double
+                y20 = ParseDouble(valLine)
+                If pendingXKind = 10 Then
+                    ' For ARC/CIRCLE/ELLIPSE this is the centre - stash
+                    ' it for the entity-level flush instead of feeding
+                    ' the bbox directly.
+                    If entityKind = "ARC" Or entityKind = "CIRCLE" Or entityKind = "ELLIPSE" Then
+                        cx = pendingX
+                        cy = y20
+                        haveCentre = True
+                    Else
+                        AccumulatePoint pendingX, y20, minX, minY, maxX, maxY, seen
+                    End If
+                End If
+
+            Case 11
+                pendingX = ParseDouble(valLine)
+                pendingXKind = 11
+
+            Case 21
+                Dim y21 As Double
+                y21 = ParseDouble(valLine)
+                If pendingXKind = 11 Then
+                    AccumulatePoint pendingX, y21, minX, minY, maxX, maxY, seen
+                End If
+
+            Case 12
+                pendingX = ParseDouble(valLine)
+                pendingXKind = 12
+
+            Case 22
+                Dim y22 As Double
+                y22 = ParseDouble(valLine)
+                If pendingXKind = 12 Then
+                    AccumulatePoint pendingX, y22, minX, minY, maxX, maxY, seen
+                End If
+
+            Case 13
+                pendingX = ParseDouble(valLine)
+                pendingXKind = 13
+
+            Case 23
+                Dim y23 As Double
+                y23 = ParseDouble(valLine)
+                If pendingXKind = 13 Then
+                    AccumulatePoint pendingX, y23, minX, minY, maxX, maxY, seen
+                End If
+
+            Case 40
+                If entityKind = "ARC" Or entityKind = "CIRCLE" Then
+                    radius = ParseDouble(valLine)
+                    haveRadius = True
+                End If
+
+            Case 50
+                If entityKind = "ARC" Then
+                    startAng = ParseDouble(valLine)
+                    haveStartAng = True
+                End If
+
+            Case 51
+                If entityKind = "ARC" Then
+                    endAng = ParseDouble(valLine)
+                    haveEndAng = True
+                End If
+        End Select
+
+        i = i + 2
+NextIter:
+    Loop
+
+    ' Don't forget the trailing entity.
+    FlushEntity entityKind, haveCentre, haveRadius, _
+                haveStartAng, haveEndAng, cx, cy, radius, _
+                startAng, endAng, minX, minY, maxX, maxY, seen
+
+    ComputeDxfBoundingBox = True
+
+End Function
+
+Sub AccumulatePoint(x As Double, y As Double, ByRef minX As Double, ByRef minY As Double, _
+                    ByRef maxX As Double, ByRef maxY As Double, ByRef seen As Boolean)
+    If Not seen Then
+        minX = x: maxX = x
+        minY = y: maxY = y
+        seen = True
+    Else
+        If x < minX Then minX = x
+        If x > maxX Then maxX = x
+        If y < minY Then minY = y
+        If y > maxY Then maxY = y
+    End If
+End Sub
+
+' Flushes a finished entity into the global bbox and resets per-entity
+' state. For CIRCLE: full bbox = centre +/- radius. For ARC: the actual
+' angular extents (handles partial arcs precisely - the previous version
+' over-estimated by treating arcs as full circles).
+Sub FlushEntity(ByRef kind As String, _
+                ByRef haveCentre As Boolean, ByRef haveRadius As Boolean, _
+                ByRef haveStartAng As Boolean, ByRef haveEndAng As Boolean, _
+                cx As Double, cy As Double, radius As Double, _
+                startAng As Double, endAng As Double, _
+                ByRef minX As Double, ByRef minY As Double, _
+                ByRef maxX As Double, ByRef maxY As Double, _
+                ByRef seen As Boolean)
+
+    If haveCentre And haveRadius And radius > 0 Then
+        If kind = "CIRCLE" Then
+            AccumulatePoint cx - radius, cy - radius, minX, minY, maxX, maxY, seen
+            AccumulatePoint cx + radius, cy + radius, minX, minY, maxX, maxY, seen
+        ElseIf kind = "ARC" And haveStartAng And haveEndAng Then
+            AccumulateArcExtents cx, cy, radius, startAng, endAng, _
+                                  minX, minY, maxX, maxY, seen
+        ElseIf kind = "ARC" Then
+            ' Missing angles - fall back to full circle bbox.
+            AccumulatePoint cx - radius, cy - radius, minX, minY, maxX, maxY, seen
+            AccumulatePoint cx + radius, cy + radius, minX, minY, maxX, maxY, seen
+        ElseIf kind = "ELLIPSE" Then
+            ' Approximate ellipse as the bounding circle of its major
+            ' axis. Acceptable for the registration mark; we could
+            ' compute the true bbox using code 11/21 (major axis end)
+            ' and the ratio (code 40) but DXF ELLIPSE entities are rare
+            ' in CNC output.
+            AccumulatePoint cx - radius, cy - radius, minX, minY, maxX, maxY, seen
+            AccumulatePoint cx + radius, cy + radius, minX, minY, maxX, maxY, seen
+        End If
+    End If
+
+    haveCentre = False: haveRadius = False
+    haveStartAng = False: haveEndAng = False
+    cx = 0: cy = 0: radius = 0
+    startAng = 0: endAng = 0
+End Sub
+
+' Computes the precise X/Y extents of an arc segment.
+' DXF ARC angles are degrees, CCW from +X. If endAng < startAng, the arc
+' wraps through 0 (we add 360 to endAng so the sweep is monotonic).
+' The arc reaches the extreme X at angle 0 (right) or 180 (left), and
+' extreme Y at 90 (top) or 270 (bottom). For each such cardinal angle
+' (and its 360-shifted copy) that falls inside the sweep, we add the
+' corresponding (centre +/- radius) point.
+Sub AccumulateArcExtents(cx As Double, cy As Double, r As Double, _
+                          startAng As Double, endAng As Double, _
+                          ByRef minX As Double, ByRef minY As Double, _
+                          ByRef maxX As Double, ByRef maxY As Double, _
+                          ByRef seen As Boolean)
+
+    Dim sAng As Double, eAng As Double
+    sAng = startAng
+    eAng = endAng
+    If eAng < sAng Then eAng = eAng + 360#
+
+    Const PI As Double = 3.14159265358979
+
+    ' Both endpoints are always extrema candidates.
+    AccumulatePoint cx + r * Cos(sAng * PI / 180#), cy + r * Sin(sAng * PI / 180#), _
+                    minX, minY, maxX, maxY, seen
+    AccumulatePoint cx + r * Cos(eAng * PI / 180#), cy + r * Sin(eAng * PI / 180#), _
+                    minX, minY, maxX, maxY, seen
+
+    Dim cardinals(3) As Double
+    cardinals(0) = 0#: cardinals(1) = 90#: cardinals(2) = 180#: cardinals(3) = 270#
+
+    Dim i As Long, offset As Double, ang As Double
+    For i = 0 To 3
+        For offset = 0# To 720# Step 360#
+            ang = cardinals(i) + offset
+            If ang >= sAng And ang <= eAng Then
+                AccumulatePoint cx + r * Cos(ang * PI / 180#), _
+                                cy + r * Sin(ang * PI / 180#), _
+                                minX, minY, maxX, maxY, seen
+            End If
+        Next offset
+    Next i
+
+End Sub
+
+Function SplitDxfLines(text As String) As String()
+    Dim normalised As String
+    normalised = Replace(text, vbCrLf, vbLf)
+    normalised = Replace(normalised, vbCr, vbLf)
+    SplitDxfLines = Split(normalised, vbLf)
+End Function
+
+Function ParseDouble(s As String) As Double
+    Dim t As String
+    t = Replace(s, ",", ".")
+    Dim out As Double
+    On Error Resume Next
+    out = CDbl(t)
+    If Err.Number <> 0 Then
+        Err.Clear
+        out = 0
+    End If
+    On Error GoTo 0
+    ParseDouble = out
+End Function
+
+' Inserts a CIRCLE entity into the ENTITIES section of the DXF text.
+' Locates the LAST 'ENDSEC' line and inserts the CIRCLE just before it
+' (after preceding 0/ENDSEC pair). Falls back to inserting before EOF
+' if no ENTITIES section is found. Returns "" on failure.
+Function InsertCircleEntity(text As String, cx As Double, cy As Double, radius As Double) As String
+
+    Dim entitiesStart As Long
+    entitiesStart = InStr(1, text, "ENTITIES", vbTextCompare)
+    If entitiesStart = 0 Then
+        InsertCircleEntity = ""
+        Exit Function
+    End If
+
+    ' Find ENDSEC that follows ENTITIES.
+    Dim endsec As Long
+    endsec = InStr(entitiesStart, text, "ENDSEC", vbTextCompare)
+    If endsec = 0 Then
+        InsertCircleEntity = ""
+        Exit Function
+    End If
+
+    ' The pattern just before ENDSEC is normally:
+    '   0
+    '   ENDSEC
+    ' We want to insert before the '0' line that introduces ENDSEC.
+    ' Walk backwards from the 'E' of ENDSEC to find its '0' code line.
+    Dim cursor As Long
+    cursor = endsec - 1
+    Do While cursor > entitiesStart
+        Dim ch As String
+        ch = Mid$(text, cursor, 1)
+        If ch = "0" Then
+            ' Need to confirm it's a standalone '0' on its own line.
+            If cursor = 1 Or Mid$(text, cursor - 1, 1) = vbLf Or Mid$(text, cursor - 1, 1) = vbCr Then
+                Exit Do
+            End If
+        End If
+        cursor = cursor - 1
+    Loop
+
+    If cursor <= entitiesStart Then
+        InsertCircleEntity = ""
+        Exit Function
+    End If
+
+    Dim insertion As String
+    insertion = BuildCircleEntityText(cx, cy, radius)
+
+    InsertCircleEntity = Left$(text, cursor - 1) & insertion & Mid$(text, cursor)
+
+End Function
+
+Function BuildCircleEntityText(cx As Double, cy As Double, radius As Double) As String
+    Dim s As String
+    s = "  0" & vbCrLf
+    s = s & "CIRCLE" & vbCrLf
+    s = s & "  8" & vbCrLf
+    s = s & "0" & vbCrLf                         ' layer 0
+    s = s & " 10" & vbCrLf
+    s = s & FormatCoord(cx) & vbCrLf
+    s = s & " 20" & vbCrLf
+    s = s & FormatCoord(cy) & vbCrLf
+    s = s & " 30" & vbCrLf
+    s = s & "0.0" & vbCrLf
+    s = s & " 40" & vbCrLf
+    s = s & FormatCoord(radius) & vbCrLf
+    BuildCircleEntityText = s
+End Function
+
+Function FormatCoord(v As Double) As String
+    ' Plain decimal with dot - CAD readers don't accept locale commas.
+    Dim s As String
+    s = CStr(v)
+    FormatCoord = Replace(s, ",", ".")
+End Function
+
+' ============================================================================
+' PATH / PROJECT HELPERS
+' ============================================================================
+
+Function EnsureTrailingBackslash(ByVal folderPath As String) As String
+    EnsureTrailingBackslash = folderPath
+    If Len(folderPath) = 0 Then Exit Function
+    If Right$(folderPath, 1) <> "\" Then EnsureTrailingBackslash = folderPath & "\"
+End Function
+
+' Prefixes are optional. First try configured prefixes, then use the first
+' child folder below a configured project-root folder.
+Function DeriveProjectFolderName(ByVal docPath As String) As String
+
+    DeriveProjectFolderName = ""
+
+    Dim parts() As String
+    parts = Split(docPath, "\")
+
+    Dim prefixes() As String
+    prefixes = Split(PROJECT_PREFIXES, ";")
+
+    Dim i As Long, j As Long, prefix As String
+    For i = LBound(parts) To UBound(parts) - 1
+        For j = LBound(prefixes) To UBound(prefixes)
+            prefix = Trim$(prefixes(j))
+            If Len(prefix) > 0 And Len(parts(i)) > Len(prefix) Then
+                If UCase$(Left$(parts(i), Len(prefix) + 1)) = UCase$(prefix & "-") Then
+                    DeriveProjectFolderName = parts(i)
+                    Exit Function
+                End If
+            End If
+        Next j
+    Next i
+
+    Dim rootNames() As String
+    rootNames = Split(PROJECT_ROOT_NAMES, ";")
+    Dim rootName As String
+    For i = LBound(parts) To UBound(parts) - 2
+        For j = LBound(rootNames) To UBound(rootNames)
+            rootName = Trim$(rootNames(j))
+            If Len(rootName) > 0 Then
+                If StrComp(parts(i), rootName, vbTextCompare) = 0 Then
+                    If Len(parts(i + 1)) > 0 Then
+                        DeriveProjectFolderName = parts(i + 1)
+                        Exit Function
+                    End If
+                End If
+            End If
+        Next j
+    Next i
+
+End Function
+
+Function BuildDxfPath(ByVal outFolder As String, ByVal partPath As String, _
+                      ByVal cfgName As String, ByVal seq As Long) As String
+
+    ' Plain "<partname>.dxf". Rule: user selects one face per part, so
+    ' the path is uniquely determined by the part file. The selection
+    ' loop dedupes by partPath before we reach here, so two instances
+    ' of the same part don't get processed twice.
+    BuildDxfPath = outFolder & PathFileNameNoExt(partPath) & ".dxf"
+
+End Function
+
+Function SanitiseForFilename(ByVal s As String) As String
+    Dim t As String
+    t = s
+    Dim invalid As String
+    invalid = "\/:*?""<>|"
+    Dim i As Long
+    For i = 1 To Len(invalid)
+        t = Replace(t, Mid$(invalid, i, 1), "_")
+    Next i
+    SanitiseForFilename = Trim$(t)
+End Function
+
+Function PathFileName(ByVal p As String) As String
+    Dim n As Long
+    n = InStrRev(p, "\")
+    If n = 0 Then
+        PathFileName = p
+    Else
+        PathFileName = Mid$(p, n + 1)
+    End If
+End Function
+
+Function PathFileNameNoExt(ByVal p As String) As String
+    Dim n As String
+    n = PathFileName(p)
+    Dim dot As Long
+    dot = InStrRev(n, ".")
+    If dot > 0 Then
+        PathFileNameNoExt = Left$(n, dot - 1)
+    Else
+        PathFileNameNoExt = n
+    End If
+End Function
+
+Function EnsureFolder(ByVal folderPath As String) As Boolean
+
+    EnsureFolder = False
+
+    Dim trimmed As String
+    trimmed = folderPath
+    If Right$(trimmed, 1) = "\" Then trimmed = Left$(trimmed, Len(trimmed) - 1)
+
+    If Len(trimmed) = 0 Then Exit Function
+    If Dir(trimmed, vbDirectory) <> "" Then
+        EnsureFolder = True
+        Exit Function
+    End If
+
+    Dim parent As String
+    Dim slash As Long
+    slash = InStrRev(trimmed, "\")
+    If slash > 0 Then
+        parent = Left$(trimmed, slash - 1)
+        ' A drive root ends with ':'; treat it as existing.
+        If Right$(parent, 1) <> ":" Then
+            If Not EnsureFolder(parent) Then Exit Function
+        End If
+    End If
+
+    On Error Resume Next
+    MkDir trimmed
+    If Err.Number <> 0 Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+    On Error GoTo 0
+
+    EnsureFolder = (Dir(trimmed, vbDirectory) <> "")
+
+End Function
+
+Sub DeleteExistingFile(ByVal filePath As String)
+    If Dir(filePath) <> "" Then
+        On Error Resume Next
+        Kill filePath
+        On Error GoTo 0
+    End If
+End Sub
+
+Function GetActiveConfigName(ByVal model As Object) As String
+    Dim cfg As Object
+    Set cfg = Nothing
+    On Error Resume Next
+    Set cfg = model.GetActiveConfiguration
+    On Error GoTo 0
+    If cfg Is Nothing Then
+        GetActiveConfigName = ""
+    Else
+        GetActiveConfigName = cfg.Name
+    End If
+End Function

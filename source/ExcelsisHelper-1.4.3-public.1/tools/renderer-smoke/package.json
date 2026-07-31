@@ -1,0 +1,10 @@
+{
+  "name": "excelsis-renderer-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "devDependencies": {
+    "electron": "42.6.1",
+    "electron-builder": "^26.0.12"
+  }
+}

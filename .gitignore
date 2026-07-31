@@ -1,0 +1,5 @@
+**/node_modules/
+**/trash/
+dist/
+*.log
+*.tmp

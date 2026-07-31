@@ -1,0 +1,798 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/machining/recommendation_request.schema.json",
+  "title": "Machining Recommendation Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "machine",
+    "workpiece",
+    "tool",
+    "cut",
+    "cooling",
+    "objective"
+  ],
+  "properties": {
+    "mode": {
+      "enum": [
+        "analyze_gcode",
+        "recommend"
+      ]
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_rpm"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_rpm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "max_feed_mm_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "measured_runout_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "rigidity_class": {
+          "enum": [
+            "light",
+            "medium",
+            "rigid",
+            "unknown"
+          ]
+        },
+        "max_accel_mm_s2": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "spindle_power_kw": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "spindle_power_curve": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rpm",
+              "kw"
+            ],
+            "properties": {
+              "rpm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "kw": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        },
+        "spindle_torque_curve": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rpm",
+              "nm"
+            ],
+            "properties": {
+              "rpm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "nm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "workpiece": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "material_id"
+      ],
+      "properties": {
+        "material_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "grade": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hardness": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "scale"
+          ],
+          "properties": {
+            "value": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "scale": {
+              "enum": [
+                "HRC",
+                "HB",
+                "HV",
+                "HRB",
+                "ShoreD",
+                "other",
+                null
+              ]
+            },
+            "measured": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "source": {
+              "enum": [
+                "measured",
+                "certificate",
+                "nominal",
+                "inferred",
+                "unknown",
+                null
+              ]
+            }
+          }
+        },
+        "material_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subfamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temper": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "silicon_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reinforcement_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "machinability_tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "diameter_mm",
+        "flute_count",
+        "substrate",
+        "application_class"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manufacturer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "series": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "square_endmill",
+            "roughing_endmill",
+            "corner_radius",
+            "ballnose",
+            "tapered_ballnose",
+            "chamfer",
+            "engraver_vbit",
+            "lollipop",
+            "undercut",
+            "face_mill",
+            "shoulder_mill",
+            "high_feed_mill",
+            "drill",
+            "reamer",
+            "tap",
+            "thread_mill",
+            "other"
+          ]
+        },
+        "diameter_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "flute_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "effective_teeth": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "substrate": {
+          "enum": [
+            "hss",
+            "hss_co",
+            "pm_hss",
+            "carbide",
+            "pcd",
+            "cbn",
+            "ceramic",
+            "cermet",
+            "unknown"
+          ]
+        },
+        "application_class": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coating_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coating_raw": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "polished_flutes": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "edge_preparation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ball_radius_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "corner_radius_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "included_angle_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 180
+        },
+        "tip_diameter_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stickout_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "neck_diameter_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "neck_length_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "loc_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "vendor_max_rpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "center_cutting": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "helix_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 90
+        },
+        "roughing_profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "holder_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "holder_max_rpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "vendor_max_feed_mm_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "cut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "ap_mm",
+        "ae_percent",
+        "contact_mode"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "full_slot",
+            "pocket",
+            "side_mill",
+            "adaptive",
+            "face",
+            "wall_finish",
+            "floor_finish",
+            "3d_finish",
+            "rest_rough",
+            "chamfer",
+            "linear_ramp",
+            "helical_ramp"
+          ]
+        },
+        "ap_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "contact_mode": {
+          "enum": [
+            "side",
+            "floor_tip",
+            "mixed_3d",
+            "wall_side",
+            "chamfer_edge",
+            "known_contact_angle",
+            "unknown"
+          ]
+        },
+        "contact_angle_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 90
+        },
+        "radial_stock_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "axial_stock_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "smallest_internal_corner_radius_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "local_max_engagement_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 180
+        },
+        "previous_tool_diameter_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "rest_stock_model_quality": {
+          "enum": [
+            "exact",
+            "simulated",
+            "previous_tool_only",
+            "unknown",
+            null
+          ]
+        },
+        "path_segment_length_mm_p10": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stock_model_quality": {
+          "enum": [
+            "exact",
+            "simulated",
+            "previous_tool_only",
+            "user_estimate",
+            "unknown",
+            null
+          ]
+        },
+        "local_engagement_multiplier": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 1.0,
+          "maximum": 3.0
+        },
+        "ramp_angle_deg": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 90
+        },
+        "target_scallop_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ae_percent": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "feature_depth_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "active_diameter_min_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "active_diameter_max_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "edge_utilization_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "cooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "continuous"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "dry",
+            "air",
+            "mist",
+            "air_plus_mql",
+            "flood",
+            "through_tool"
+          ]
+        },
+        "continuous": {
+          "type": "boolean"
+        },
+        "directed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "flow_quality": {
+          "enum": [
+            "weak",
+            "directed",
+            "strong",
+            "unknown",
+            null
+          ]
+        },
+        "chip_evacuation_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "lubrication_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fluid_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lubrication_quality": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "unknown",
+            null
+          ]
+        },
+        "polymer_compatibility": {
+          "enum": [
+            "compatible",
+            "incompatible",
+            "unknown",
+            "not_applicable",
+            null
+          ]
+        }
+      }
+    },
+    "objective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aggressiveness",
+        "priority"
+      ],
+      "properties": {
+        "aggressiveness": {
+          "enum": [
+            "conservative",
+            "balanced",
+            "slightly_aggressive"
+          ]
+        },
+        "priority": {
+          "enum": [
+            "tool_life",
+            "balanced",
+            "cycle_time",
+            "surface_finish"
+          ]
+        },
+        "unattended": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "gcode_context": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "commanded_rpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "commanded_feed_mm_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "tool_number": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "operation_comment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dialect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "units": {
+          "enum": [
+            "mm",
+            "inch",
+            null
+          ]
+        },
+        "commanded_feed_mode": {
+          "enum": [
+            "per_min",
+            "per_rev",
+            "inverse_time",
+            "unknown",
+            null
+          ]
+        }
+      }
+    }
+  }
+}

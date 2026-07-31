@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/machining/normalized_cutting_record.schema.json",
+  "title": "Normalized Cutting Data Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "tool",
+    "workpiece",
+    "operation",
+    "cutting_data",
+    "source",
+    "review_status"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "object",
+      "required": [
+        "type",
+        "substrate",
+        "application_class"
+      ],
+      "properties": {
+        "manufacturer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "series": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "substrate": {
+          "type": "string"
+        },
+        "application_class": {
+          "type": "string"
+        },
+        "coating_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "polished": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "flute_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "diameter_min_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "diameter_max_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "diameter_points_mm": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "workpiece": {
+      "type": "object",
+      "required": [
+        "material_id"
+      ],
+      "properties": {
+        "material_id": {
+          "type": "string"
+        },
+        "raw_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hardness_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "hardness_max": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "hardness_scale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "ae_ref_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ae_ref_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ap_ref_d": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ap_ref_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "contact_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cooling_allowed": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "ap_ref_min_d": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ap_ref_max_d": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "ae_ref_min_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ae_ref_max_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "stock_model_assumption": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "cutting_data": {
+      "type": "object",
+      "required": [
+        "feed_basis"
+      ],
+      "properties": {
+        "feed_basis": {
+          "enum": [
+            "fz",
+            "hmax",
+            "feed_per_rev",
+            "table_feed",
+            "mixed"
+          ]
+        },
+        "vc_min_m_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "vc_target_m_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "vc_max_m_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "fz_min_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "fz_target_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "fz_max_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "hmax_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "rpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "feed_mm_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "diameter_table": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object"
+          }
+        },
+        "chip_thinning_already_included": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "original_units": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original_values": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "source_rounding_tolerance_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "normalization_method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "manufacturer",
+        "document_title",
+        "url_or_file"
+      ],
+      "properties": {
+        "manufacturer": {
+          "type": "string"
+        },
+        "document_title": {
+          "type": "string"
+        },
+        "url_or_file": {
+          "type": "string"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "checked_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "assumptions_raw": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "checksum_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "table_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retrieved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "review_status": {
+      "enum": [
+        "extracted",
+        "reviewed",
+        "approved",
+        "rejected"
+      ]
+    },
+    "notes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

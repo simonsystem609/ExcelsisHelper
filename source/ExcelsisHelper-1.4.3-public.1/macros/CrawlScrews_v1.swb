@@ -1,0 +1,593 @@
+Option Explicit
+
+' ============================================================================
+' CrawlScrews_v1 - create a local diagnostic bundle for screw-BOM review of
+' the active SOLIDWORKS assembly. Writes a self-contained folder at
+'   <assembly_dir>\screwlist\<YYMMDD_HHMMSS>\
+' containing:
+'   - <view>.png        for each of 8 standard view angles + isometric
+'   - features.json     per-component feature tree dump (hole-relevant)
+'   - components.json   assembly tree, instance counts, configurations
+'   - assistant-prompt.txt  human/AI-readable prompt referencing the above
+'
+' The output stays local. It can contain screenshots, absolute document and
+' component paths, configurations, and feature names. Review it before
+' choosing whether to share it with any external tool or person.
+' ============================================================================
+
+Const swDocPART As Long = 1
+Const swDocASSEMBLY As Long = 2
+Const swDocDRAWING As Long = 3
+
+' Standard view names exposed by IModelView.ActivateView. The macro
+' iterates these and snapshots each one. Adjust the list if the review needs
+' more or fewer angles.
+Const VIEW_NAMES As String = "*Front,*Back,*Top,*Bottom,*Left,*Right,*Isometric,*Trimetric,*Dimetric"
+
+' Image dimensions for each screenshot. Bigger means more review detail but
+' slower export. 1600 x 1000 matches what DXF_v16 and the source-capture
+' macro use.
+Const IMG_WIDTH As Long = 1600
+Const IMG_HEIGHT As Long = 1000
+
+Dim swApp As Object
+
+Private Function ConfirmDiagnosticCapture() As Boolean
+    Dim disclosure As String
+    disclosure = "CrawlScrews will create a local diagnostic bundle containing:" & vbCrLf & vbCrLf & _
+                 "- screenshots of the active CAD document" & vbCrLf & _
+                 "- absolute document and component paths" & vbCrLf & _
+                 "- configurations and feature names" & vbCrLf & vbCrLf & _
+                 "Nothing is uploaded automatically. Review the bundle before sharing it." & vbCrLf & vbCrLf & _
+                 "Create this diagnostic bundle now?"
+    ConfirmDiagnosticCapture = (MsgBox(disclosure, vbYesNo + vbExclamation + vbDefaultButton2, _
+                                       "Confirm local diagnostic capture") = vbYes)
+End Function
+
+Sub main()
+
+    If Not ConfirmDiagnosticCapture() Then Exit Sub
+
+    Set swApp = Application.SldWorks
+
+    Dim swModel As Object
+    Set swModel = swApp.ActiveDoc
+    If swModel Is Nothing Then
+        MsgBox "Open an assembly in SOLIDWORKS first.", vbExclamation, "CrawlScrews"
+        Exit Sub
+    End If
+
+    Dim mType As Long
+    mType = swModel.GetType
+    If mType <> swDocASSEMBLY And mType <> swDocPART Then
+        MsgBox "Active document must be an assembly (or part).", vbExclamation, "CrawlScrews"
+        Exit Sub
+    End If
+
+    Dim docPath As String
+    docPath = swModel.GetPathName
+    If Len(docPath) = 0 Then
+        MsgBox "Save the assembly first - CrawlScrews needs its path to derive the output folder.", _
+               vbExclamation, "CrawlScrews"
+        Exit Sub
+    End If
+
+    Dim baseDir As String
+    baseDir = Left$(docPath, InStrRev(docPath, "\"))
+    Dim stamp As String
+    stamp = Format$(Now, "yyMMdd_HHmmss")
+    Dim outDir As String
+    outDir = baseDir & "screwlist\" & stamp & "\"
+    If Not EnsureFolder(outDir) Then
+        MsgBox "Could not create output folder:" & vbCrLf & outDir, vbCritical, "CrawlScrews"
+        Exit Sub
+    End If
+
+    Debug.Print "CrawlScrews output: " & outDir
+
+    ' Capture screenshots first to provide visual context.
+    Dim shotResults As String
+    shotResults = CaptureStandardViews(swModel, outDir)
+
+    ' Walk the assembly tree and dump feature info.
+    Dim componentsJson As String
+    Dim featuresJson As String
+    If mType = swDocASSEMBLY Then
+        componentsJson = DumpAssemblyComponents(swModel)
+        featuresJson = DumpAssemblyFeatures(swModel)
+    Else
+        componentsJson = "{""kind"":""part"",""path"":" & JsonString(docPath) & "}"
+        featuresJson = "[" & DumpPartFeatures(swModel, docPath, "") & "]"
+    End If
+
+    WriteText outDir & "components.json", componentsJson
+    WriteText outDir & "features.json", featuresJson
+
+    ' Optional assistant prompt. Relative file names keep the local bundle
+    ' self-describing.
+    Dim promptText As String
+    promptText = BuildAssistantPrompt(docPath, shotResults)
+    WriteText outDir & "assistant-prompt.txt", promptText
+
+    ' Open Explorer at the output folder so the user can immediately
+    ' inspect what we captured.
+    Dim shellObj As Object
+    Set shellObj = CreateObject("WScript.Shell")
+    On Error Resume Next
+    shellObj.Run "explorer.exe """ & outDir & """", 1, False
+    On Error GoTo 0
+
+    MsgBox "CrawlScrews wrote a local diagnostic bundle to:" & vbCrLf & outDir & vbCrLf & vbCrLf & _
+           "Review assistant-prompt.txt, the JSON files, and screenshots before sharing them." & vbCrLf & _
+           "The resulting Excel screw BOM belongs in the assembly folder.", _
+           vbInformation, "CrawlScrews"
+
+End Sub
+
+' ============================================================================
+' SCREENSHOTS
+' ============================================================================
+
+Function CaptureStandardViews(swModel As Object, outDir As String) As String
+
+    Dim names() As String
+    names = Split(VIEW_NAMES, ",")
+
+    Dim ok As Long
+    Dim fail As Long
+    Dim resultSummary As String
+    ok = 0
+    fail = 0
+
+    Dim i As Long
+    For i = LBound(names) To UBound(names)
+        Dim viewName As String
+        viewName = Trim$(names(i))
+        Dim safeName As String
+        safeName = Replace(viewName, "*", "")
+
+        Dim activated As Boolean
+        activated = False
+        On Error Resume Next
+        swModel.ShowNamedView2 viewName, -1
+        activated = True
+        On Error GoTo 0
+
+        If activated Then
+            Dim ratioed As Boolean
+            On Error Resume Next
+            ratioed = swModel.ViewZoomtofit2
+            On Error GoTo 0
+
+            Dim pngPath As String
+            pngPath = outDir & safeName & ".png"
+
+            Dim saved As Boolean
+            saved = False
+            On Error Resume Next
+            saved = swModel.SaveBMP(pngPath, IMG_WIDTH, IMG_HEIGHT)
+            On Error GoTo 0
+
+            ' SaveBMP writes BMP regardless of extension; rename if it
+            ' lands as .bmp. Otherwise try SaveAs with PNG.
+            If Not saved Then
+                ' Fallback: use the ModelDocExtension.SaveAs path.
+                Dim errs As Long, warns As Long
+                On Error Resume Next
+                saved = swModel.Extension.SaveAs(pngPath, 0, 0, Nothing, errs, warns)
+                On Error GoTo 0
+            End If
+
+            If Dir(pngPath) <> "" Then
+                ok = ok + 1
+                resultSummary = resultSummary & "  " & safeName & ".png" & vbCrLf
+            Else
+                fail = fail + 1
+            End If
+        Else
+            fail = fail + 1
+        End If
+    Next i
+
+    Debug.Print "Captured " & ok & " view(s), " & fail & " failed."
+    CaptureStandardViews = resultSummary
+
+End Function
+
+' ============================================================================
+' ASSEMBLY WALK
+' ============================================================================
+
+' Returns a JSON object describing the assembly tree: each unique part
+' referenced + how many instances appear.
+Function DumpAssemblyComponents(swModel As Object) As String
+
+    Dim partCount As Object
+    Set partCount = CreateObject("Scripting.Dictionary")
+    Dim partPaths As Object
+    Set partPaths = CreateObject("Scripting.Dictionary")
+
+    Dim rootComps As Variant
+    On Error Resume Next
+    rootComps = swModel.GetComponents(False)
+    On Error GoTo 0
+
+    Dim i As Long
+    If Not IsEmpty(rootComps) Then
+        For i = 0 To UBound(rootComps)
+            CollectComponent rootComps(i), partCount, partPaths
+        Next i
+    End If
+
+    Dim sb As String
+    sb = "{" & JsonPair("assemblyPath", swModel.GetPathName) & "," & _
+         JsonRaw("components") & ":["
+
+    Dim first As Boolean
+    first = True
+    Dim k As Variant
+    For Each k In partCount.Keys
+        If Not first Then sb = sb & ","
+        sb = sb & "{" & _
+             JsonPair("part", CStr(k)) & "," & _
+             JsonPair("path", CStr(partPaths(k))) & "," & _
+             JsonRaw("instanceCount") & ":" & CStr(partCount(k)) & _
+             "}"
+        first = False
+    Next k
+
+    sb = sb & "]}"
+    DumpAssemblyComponents = sb
+
+End Function
+
+Sub CollectComponent(comp As Object, partCount As Object, partPaths As Object)
+
+    If comp Is Nothing Then Exit Sub
+    If comp.IsSuppressed Then Exit Sub
+
+    Dim partPath As String
+    partPath = ""
+    On Error Resume Next
+    partPath = comp.GetPathName
+    On Error GoTo 0
+
+    Dim partKey As String
+    partKey = LCase$(partPath)
+    If Len(partKey) > 0 Then
+        If partCount.Exists(partKey) Then
+            partCount(partKey) = partCount(partKey) + 1
+        Else
+            partCount.Add partKey, 1
+            partPaths.Add partKey, partPath
+        End If
+    End If
+
+    Dim children As Variant
+    children = Empty
+    On Error Resume Next
+    children = comp.GetChildren
+    On Error GoTo 0
+    If Not IsEmpty(children) Then
+        Dim ci As Long
+        For ci = 0 To UBound(children)
+            CollectComponent children(ci), partCount, partPaths
+        Next ci
+    End If
+
+End Sub
+
+' Returns a JSON array of per-component feature dumps. Each entry contains
+' the part path, configuration, and a list of hole-related features.
+Function DumpAssemblyFeatures(swModel As Object) As String
+
+    Dim rootComps As Variant
+    On Error Resume Next
+    rootComps = swModel.GetComponents(False)
+    On Error GoTo 0
+    If IsEmpty(rootComps) Then
+        DumpAssemblyFeatures = "[]"
+        Exit Function
+    End If
+
+    Dim seen As Object
+    Set seen = CreateObject("Scripting.Dictionary")
+    Dim sb As String
+    sb = "["
+    Dim first As Boolean
+    first = True
+
+    Dim i As Long
+    For i = 0 To UBound(rootComps)
+        WalkComponent rootComps(i), seen, sb, first
+    Next i
+
+    sb = sb & "]"
+    DumpAssemblyFeatures = sb
+
+End Function
+
+Sub WalkComponent(comp As Object, seen As Object, ByRef sb As String, ByRef first As Boolean)
+
+    If comp Is Nothing Then Exit Sub
+    If comp.IsSuppressed Then Exit Sub
+
+    Dim partPath As String
+    partPath = ""
+    On Error Resume Next
+    partPath = comp.GetPathName
+    On Error GoTo 0
+
+    Dim cfg As String
+    cfg = ""
+    On Error Resume Next
+    cfg = comp.ReferencedConfiguration
+    On Error GoTo 0
+
+    Dim partKey As String
+    partKey = LCase$(partPath) & "|" & cfg
+    If Len(partPath) > 0 And Not seen.Exists(partKey) Then
+        seen.Add partKey, True
+        Dim modelDoc As Object
+        Set modelDoc = Nothing
+        On Error Resume Next
+        Set modelDoc = comp.GetModelDoc2
+        On Error GoTo 0
+        If Not modelDoc Is Nothing Then
+            If Not first Then sb = sb & ","
+            sb = sb & DumpPartFeatures(modelDoc, partPath, cfg)
+            first = False
+        End If
+    End If
+
+    Dim children As Variant
+    children = Empty
+    On Error Resume Next
+    children = comp.GetChildren
+    On Error GoTo 0
+    If Not IsEmpty(children) Then
+        Dim ci As Long
+        For ci = 0 To UBound(children)
+            WalkComponent children(ci), seen, sb, first
+        Next ci
+    End If
+
+End Sub
+
+' Returns a JSON object describing one part's features. Filters to only
+' the feature types that are relevant for screw inference - hole wizard,
+' simple holes, cut-extrudes (often used as holes), threads.
+Function DumpPartFeatures(modelDoc As Object, partPath As String, cfgName As String) As String
+
+    Dim sb As String
+    sb = "{" & _
+         JsonPair("part", partPath) & "," & _
+         JsonPair("config", cfgName) & "," & _
+         JsonRaw("features") & ":["
+
+    Dim count As Long
+    count = 0
+    On Error Resume Next
+    count = modelDoc.FeatureManager.GetFeatureCount(False)
+    On Error GoTo 0
+
+    Dim featuresArr As Variant
+    featuresArr = Empty
+    On Error Resume Next
+    featuresArr = modelDoc.FeatureManager.GetFeatures(False)
+    On Error GoTo 0
+
+    Dim first As Boolean
+    first = True
+
+    If Not IsEmpty(featuresArr) Then
+        Dim i As Long
+        For i = 0 To UBound(featuresArr)
+            Dim feat As Object
+            Set feat = featuresArr(i)
+            If Not feat Is Nothing Then
+                Dim typeName As String
+                typeName = ""
+                On Error Resume Next
+                typeName = feat.GetTypeName2
+                On Error GoTo 0
+
+                If IsHoleRelevantFeatureType(typeName) Then
+                    If Not first Then sb = sb & ","
+                    sb = sb & DumpFeature(feat, typeName)
+                    first = False
+                End If
+            End If
+        Next i
+    End If
+
+    sb = sb & "]}"
+    DumpPartFeatures = sb
+
+End Function
+
+Function IsHoleRelevantFeatureType(typeName As String) As Boolean
+    Dim t As String
+    t = LCase$(typeName)
+    ' Common SOLIDWORKS internal type names for hole-related features.
+    ' Add more here as we discover them in real models.
+    Dim hits As Variant
+    hits = Array("hole", "holewzd", "cholewzd", "holesimple", "thread", _
+                 "cosmeticthread", "cut", "extrusion", "tap", "hwzd")
+    Dim h As Long
+    For h = LBound(hits) To UBound(hits)
+        If InStr(t, hits(h)) > 0 Then
+            IsHoleRelevantFeatureType = True
+            Exit Function
+        End If
+    Next h
+    IsHoleRelevantFeatureType = False
+End Function
+
+Function DumpFeature(feat As Object, typeName As String) As String
+
+    Dim name As String
+    Dim dispType As String
+    name = "" : dispType = typeName
+    On Error Resume Next
+    name = feat.Name
+    On Error GoTo 0
+
+    Dim sb As String
+    sb = "{" & _
+         JsonPair("name", name) & "," & _
+         JsonPair("type", dispType)
+
+    ' Pull dimensions when present. Each feature has 0..N parameters; we
+    ' enumerate them by name and emit value + unit.
+    Dim params As String
+    params = ""
+    Dim dispDim As Object
+    Set dispDim = Nothing
+    On Error Resume Next
+    Set dispDim = feat.GetFirstDisplayDimension
+    On Error GoTo 0
+    Dim pfirst As Boolean
+    pfirst = True
+    Do While Not dispDim Is Nothing
+        Dim dim_ As Object
+        Set dim_ = Nothing
+        On Error Resume Next
+        Set dim_ = dispDim.GetDimension2(0)
+        On Error GoTo 0
+        If Not dim_ Is Nothing Then
+            Dim fullName As String
+            fullName = ""
+            Dim val As Double
+            val = 0
+            On Error Resume Next
+            fullName = dim_.FullName
+            val = dim_.GetSystemValue3(1, "")(0)
+            On Error GoTo 0
+            If Len(fullName) > 0 Then
+                If Not pfirst Then params = params & ","
+                params = params & "{" & JsonPair("name", fullName) & "," & _
+                                  JsonRaw("valueMm") & ":" & FormatDouble(val * 1000#) & "}"
+                pfirst = False
+            End If
+        End If
+        Dim nextDim As Object
+        Set nextDim = Nothing
+        On Error Resume Next
+        Set nextDim = feat.GetNextDisplayDimension(dispDim)
+        On Error GoTo 0
+        Set dispDim = nextDim
+    Loop
+
+    sb = sb & "," & JsonRaw("dimensions") & ":[" & params & "]"
+    sb = sb & "}"
+
+    DumpFeature = sb
+
+End Function
+
+' ============================================================================
+' OPTIONAL ASSISTANT PROMPT
+' ============================================================================
+
+Function BuildAssistantPrompt(assemblyPath As String, shotSummary As String) As String
+
+    Dim s As String
+    s = "Generate a screw BOM for this SOLIDWORKS assembly." & vbCrLf & vbCrLf
+    s = s & "Assembly: " & assemblyPath & vbCrLf & vbCrLf
+
+    s = s & "INPUTS in this folder:" & vbCrLf
+    s = s & "  - components.json   instance count for every unique part referenced" & vbCrLf
+    s = s & "  - features.json     per-component dump of hole-relevant features + dimensions" & vbCrLf
+    s = s & "  - <view>.png        screenshots from these angles:" & vbCrLf
+    s = s & shotSummary & vbCrLf
+
+    s = s & "TASK:" & vbCrLf
+    s = s & "  1. For every hole that a screw passes through, identify:" & vbCrLf
+    s = s & "       thread spec (e.g. M8x1.25), head type (countersunk / counterbore / pan / button)," & vbCrLf
+    s = s & "       length range, and the number of identical instances." & vbCrLf
+    s = s & "  2. Use visual cues from the PNGs PLUS feature-tree data in features.json." & vbCrLf
+    s = s & "     Hole sizes that map to standard threads (6.8mm -> M8 tap, 8.5mm -> M10 tap," & vbCrLf
+    s = s & "     5.1mm -> M6 tap, etc.) should be assumed tapped unless geometry says otherwise." & vbCrLf
+    s = s & "  3. For non-standard threads (anything not in the M-series), spell out the pitch." & vbCrLf
+    s = s & "  4. Output as an XLSX file named screws.xlsx with columns:" & vbCrLf
+    s = s & "       Thread | Head Type | Length (mm) | Drive | Count | Notes" & vbCrLf
+    s = s & "     Group by thread+head+length. Notes column can flag inferred vs explicit." & vbCrLf
+    s = s & "  5. Save the XLSX in the assembly folder:" & vbCrLf
+    s = s & "       " & Left$(assemblyPath, InStrRev(assemblyPath, "\")) & "screws.xlsx" & vbCrLf
+    s = s & vbCrLf
+
+    s = s & "NOTES:" & vbCrLf
+    s = s & "  - Some components may not be screws (washers, dowel pins). Skip those." & vbCrLf
+    s = s & "  - Counterbore depths > screw-head height by ~0.5mm suggest a socket-head cap screw." & vbCrLf
+    s = s & "  - Countersink half-angles 82deg vs 90deg distinguish imperial vs metric flat-head." & vbCrLf
+    s = s & vbCrLf
+    s = s & "Keep the review grounded in the JSON and screenshots; do not invent features." & vbCrLf
+
+    BuildAssistantPrompt = s
+
+End Function
+
+' ============================================================================
+' UTILS
+' ============================================================================
+
+Function JsonString(value As String) As String
+    Dim s As String
+    s = value
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    s = Replace(s, vbCr, "\r")
+    s = Replace(s, vbLf, "\n")
+    s = Replace(s, vbTab, "\t")
+    JsonString = """" & s & """"
+End Function
+
+Function JsonPair(key As String, value As String) As String
+    JsonPair = """" & key & """:" & JsonString(value)
+End Function
+
+Function JsonRaw(key As String) As String
+    JsonRaw = """" & key & """"
+End Function
+
+Function FormatDouble(v As Double) As String
+    Dim s As String
+    s = CStr(v)
+    FormatDouble = Replace(s, ",", ".")
+End Function
+
+Sub WriteText(filePath As String, content As String)
+    Dim fnum As Long
+    fnum = FreeFile
+    On Error Resume Next
+    Open filePath For Output As #fnum
+    Print #fnum, content;
+    Close #fnum
+    On Error GoTo 0
+End Sub
+
+Function EnsureFolder(ByVal folderPath As String) As Boolean
+    EnsureFolder = False
+    Dim trimmed As String
+    trimmed = folderPath
+    If Right$(trimmed, 1) = "\" Then trimmed = Left$(trimmed, Len(trimmed) - 1)
+    If Len(trimmed) = 0 Then Exit Function
+    If Dir(trimmed, vbDirectory) <> "" Then
+        EnsureFolder = True
+        Exit Function
+    End If
+    Dim slash As Long
+    slash = InStrRev(trimmed, "\")
+    If slash > 0 Then
+        Dim parent As String
+        parent = Left$(trimmed, slash - 1)
+        If Right$(parent, 1) <> ":" Then
+            If Not EnsureFolder(parent) Then Exit Function
+        End If
+    End If
+    On Error Resume Next
+    MkDir trimmed
+    On Error GoTo 0
+    EnsureFolder = (Dir(trimmed, vbDirectory) <> "")
+End Function

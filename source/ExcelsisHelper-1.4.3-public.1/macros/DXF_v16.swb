@@ -1,0 +1,6021 @@
+Option Explicit
+
+
+
+Const swDocPART       As Long = 1
+
+Const swDocASSEMBLY   As Long = 2
+
+Const swDocDRAWING    As Long = 3
+
+Const THICKNESS_LIMIT As Double = 20.1
+
+Const THIN_PLATE_MIN_RATIO As Double = 2#
+Const MIN_PLANAR_AREA_RATIO As Double = 0.25
+Const MIN_LARGEST_PLANAR_FOOTPRINT_RATIO As Double = 0.15
+' Washerlike binning: keep only parts that are simultaneously small enough
+' (longest bbox dimension under WASHERLIKE_MAX_LONG_MM) AND have a low
+' longDim/thickness ratio AND have a close-to-square/circular footprint
+' (width near longDim). The old single-ratio test caught any small thin
+' solid; that mis-binned compact tail plates (for example 60 x 72.735 x 13 mm,
+' ratio 5.6) and borderline thin plates near 20-ratio.
+Const WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO As Double = 12#
+Const WASHERLIKE_MAX_LONG_MM As Double = 60#
+Const WASHERLIKE_MIN_ASPECT As Double = 0.7
+Const DEFAULT_MATERIAL As String = "MATERIAL"
+Const MATERIAL_PROMPT_TIMEOUT_SEC As Long = 5
+Const DRAW_TEMPLATE As String = ""
+Const DXF_OUTPUT_PREFIX As String = "PLATE"
+
+Const swSaveAsCurrentVersion      As Long = 0
+Const swSaveAsOptions_Silent      As Long = 1
+Const swExportToDWG_ExportSheetMetal As Long = 1
+Const swExportToDWG_ExportSelectedFacesOrLoops As Long = 2
+Const swExportToDWG_ExportAnnotationViews As Long = 3
+Const swDxfOutputNoScale          As Long = 136
+Const SHEET_METAL_EXPORT_OPTIONS  As Long = 1
+Const swExportFlatPatternOption_None As Long = 0
+Const swExportFlatPatternOption_RemoveBends As Long = 1
+Const swDefaultTemplateDrawing As Long = 10
+Const IDTIMEOUT As Long = 32000
+
+#If VBA7 Then
+    Private Declare PtrSafe Function MessageBoxTimeout Lib "user32" Alias "MessageBoxTimeoutA" ( _
+        ByVal hwnd As LongPtr, _
+        ByVal lpText As String, _
+        ByVal lpCaption As String, _
+        ByVal wType As Long, _
+        ByVal wLanguageId As Long, _
+        ByVal dwMilliseconds As Long) As Long
+#Else
+    Private Declare Function MessageBoxTimeout Lib "user32" Alias "MessageBoxTimeoutA" ( _
+        ByVal hwnd As Long, _
+        ByVal lpText As String, _
+        ByVal lpCaption As String, _
+        ByVal wType As Long, _
+        ByVal wLanguageId As Long, _
+        ByVal dwMilliseconds As Long) As Long
+#End If
+
+
+Const MODE_REGULAR As Integer = 1
+
+Const MODE_PRECUT  As Integer = 2
+
+
+
+Dim swApp As Object
+
+
+
+Dim g_precutOffset_mm As Double
+
+Dim g_precutKeepFeats As Boolean
+
+Dim g_material As String
+
+Dim g_dxfComp() As Long
+
+Dim g_dxfDropComp() As Boolean
+
+Function GetDrawingTemplatePath() As String
+    If Len(Trim$(DRAW_TEMPLATE)) > 0 Then
+        GetDrawingTemplatePath = DRAW_TEMPLATE
+        Exit Function
+    End If
+    On Error Resume Next
+    GetDrawingTemplatePath = swApp.GetUserPreferenceStringValue(swDefaultTemplateDrawing)
+    On Error GoTo 0
+End Function
+
+
+' ================================================================
+
+Sub main()
+
+
+
+    Set swApp = Application.SldWorks
+
+
+
+    Dim swModel As Object
+
+    Set swModel = swApp.ActiveDoc
+
+    If swModel Is Nothing Then
+
+        MsgBox "No active document."
+
+        Exit Sub
+
+    End If
+
+
+
+    Dim mType As Long
+
+    mType = swModel.GetType
+
+    If mType <> swDocPART And mType <> swDocASSEMBLY Then
+
+        MsgBox "Open a Part or Assembly."
+
+        Exit Sub
+
+    End If
+
+
+
+    If swModel.GetPathName = "" Then
+
+        MsgBox "Save the active document before exporting DXFs."
+
+        Exit Sub
+
+    End If
+
+    Dim selMgr As Object
+    Set selMgr = swModel.SelectionManager
+
+    Dim selCount As Long
+
+    selCount = selMgr.GetSelectedObjectCount2(-1)
+
+
+
+    If Not AskMaterial() Then Exit Sub
+
+
+
+    Debug.Print "==== DXF EXPORT v16 washer ratio split ===="
+    Debug.Print "Active: " & swModel.GetPathName
+
+    Debug.Print "Type: " & IIf(mType = swDocPART, "PART", "ASSEMBLY")
+
+    Debug.Print "Selections: " & selCount
+
+    Debug.Print "Material: " & g_material
+
+
+    Dim mode As Integer
+
+    mode = MODE_REGULAR
+
+    Dim needPrompt As Boolean
+
+    needPrompt = False
+
+    If mType = swDocPART Then needPrompt = True
+
+    If mType = swDocASSEMBLY And selCount > 0 Then needPrompt = True
+
+
+
+    If needPrompt Then
+
+        mode = AskExportMode()
+
+        If mode = 0 Then Exit Sub
+
+        If mode = MODE_PRECUT Then
+
+            If Not AskPrecutSettings() Then Exit Sub
+
+            Debug.Print "Precut: offset=" & g_precutOffset_mm & "mm  keepFeats=" & g_precutKeepFeats
+
+        End If
+
+    End If
+
+
+
+    Debug.Print "Mode: " & IIf(mode = MODE_REGULAR, "REGULAR", "PRECUT")
+
+
+
+    Dim baseFolder As String
+
+    baseFolder = Left(swModel.GetPathName, InStrRev(swModel.GetPathName, "\"))
+
+    Dim dxfFolder As String
+
+    If mode = MODE_PRECUT Then
+
+        dxfFolder = baseFolder & "dxf_precut\"
+
+    Else
+
+        dxfFolder = baseFolder & "dxf\"
+
+    End If
+
+    If Dir(dxfFolder, vbDirectory) = "" Then MkDir dxfFolder
+
+    Debug.Print "Output folder: " & dxfFolder
+
+
+
+    Dim dictDone   As Object
+
+    Dim dictOpened As Object
+
+    Dim dictAssemblyParts As Object
+    Dim dictInitiallyVisiblePartWindows As Object
+
+    Set dictDone = CreateObject("Scripting.Dictionary")
+
+    Set dictOpened = CreateObject("Scripting.Dictionary")
+
+    Set dictInitiallyVisiblePartWindows = BuildVisibleOpenPartWindowPathDict()
+
+    If mType = swDocASSEMBLY Then Set dictAssemblyParts = BuildAssemblyPartPathDict(swModel)
+
+
+    If mType = swDocPART Then
+
+        Debug.Print "--- Single part mode ---"
+
+        ProcessSinglePart swModel, swModel.GetPathName, _
+                          GetActiveConfigName(swModel), 1, dxfFolder, mode, dictDone
+
+    ElseIf selCount > 0 Then
+
+        Debug.Print "--- Assembly with selection ---"
+
+        Dim dictQty As Object
+
+        Set dictQty = BuildQtyDict(swModel)
+
+        ProcessSelectedComponents swModel, selMgr, selCount, dxfFolder, mode, _
+                                  dictQty, dictDone, dictOpened
+
+    Else
+
+        Debug.Print "--- Assembly full export ---"
+
+        ProcessFullAssembly swModel, dxfFolder, dictDone, dictOpened
+
+    End If
+
+
+
+    Debug.Print "-----------------------------------------"
+
+    If mType = swDocASSEMBLY Then
+
+        CloseAssemblyPartDocs dictAssemblyParts, dictInitiallyVisiblePartWindows
+
+    Else
+
+        Dim k As Variant
+    For Each k In dictOpened.Keys
+
+        Debug.Print "  Closing: " & dictOpened(k)
+
+        swApp.CloseDoc dictOpened(k)
+
+        Next k
+
+    End If
+
+
+    Debug.Print "==== EXPORT COMPLETE ===="
+
+    MsgBox "DXF export done. Check Immediate Window."
+
+End Sub
+
+
+
+' ================================================================
+
+Function GetActiveConfigName(swModel As Object) As String
+
+    Dim c As Object
+
+    Set c = swModel.GetActiveConfiguration
+
+    If c Is Nothing Then
+
+        GetActiveConfigName = ""
+
+    Else
+
+        GetActiveConfigName = c.Name
+
+    End If
+
+End Function
+
+
+
+' ================================================================
+
+Function AskExportMode() As Integer
+    Dim r As VbMsgBoxResult
+
+    r = MsgBox("Export as:" & vbCrLf & vbCrLf & _
+               "YES   = Regular DXF" & vbCrLf & _
+               "NO    = Crude precut (offset outline)" & vbCrLf & _
+               "CANCEL = abort", vbYesNoCancel + vbQuestion, "Export type")
+
+    Select Case r
+
+        Case vbYes
+
+            AskExportMode = MODE_REGULAR
+
+        Case vbNo
+
+            AskExportMode = MODE_PRECUT
+
+        Case vbCancel
+
+            AskExportMode = 0
+
+    End Select
+
+End Function
+
+Function AskMaterial() As Boolean
+
+    g_material = DEFAULT_MATERIAL
+
+    Dim choice As Long
+
+    choice = 0
+
+    On Error Resume Next
+
+    choice = MessageBoxTimeout(0, _
+                               "Material for DXF filenames defaults to " & DEFAULT_MATERIAL & "." & vbCrLf & vbCrLf & _
+                               "YES = export now with " & DEFAULT_MATERIAL & vbCrLf & _
+                               "NO = change material" & vbCrLf & _
+                               "CANCEL = abort" & vbCrLf & vbCrLf & _
+                               "Auto-export starts in " & MATERIAL_PROMPT_TIMEOUT_SEC & " seconds.", _
+                               "DXF material", vbYesNoCancel + vbQuestion + vbDefaultButton1, 0, _
+                               MATERIAL_PROMPT_TIMEOUT_SEC * 1000)
+
+    If Err.Number <> 0 Then
+
+        Err.Clear
+
+        choice = IDTIMEOUT
+
+    End If
+
+    On Error GoTo 0
+
+    If choice = vbCancel Then Exit Function
+
+    If choice = vbYes Or choice = IDTIMEOUT Or choice = 0 Then
+
+        AskMaterial = True
+
+        Exit Function
+
+    End If
+
+    Dim s As String
+
+    s = InputBox("Material text for DXF filenames:" & vbCrLf & _
+                 "Example: " & DEFAULT_MATERIAL & " gives " & DXF_OUTPUT_PREFIX & "3_" & DEFAULT_MATERIAL & "_2db_part(config).dxf", _
+                 "DXF material", DEFAULT_MATERIAL)
+
+    If Trim(s) = "" Then Exit Function
+
+    g_material = UCase(CleanFileName(Trim(s)))
+
+    If g_material = "" Then
+
+        MsgBox "Invalid material."
+
+        Exit Function
+
+    End If
+
+    AskMaterial = True
+
+End Function
+
+Function AskPrecutSettings() As Boolean
+    Dim s As String
+
+    s = InputBox("Offset outward from outline (mm):", "Crude precut", "20")
+
+    If s = "" Then
+
+        AskPrecutSettings = False
+
+        Exit Function
+
+    End If
+
+    If Not IsNumeric(s) Then
+
+        MsgBox "Invalid number."
+
+        AskPrecutSettings = False
+
+        Exit Function
+
+    End If
+
+    g_precutOffset_mm = CDbl(s)
+
+    If g_precutOffset_mm < 0 Then g_precutOffset_mm = 0
+
+
+
+    Dim r As VbMsgBoxResult
+
+    r = MsgBox("Keep original outline + holes inside the offset outline?" & vbCrLf & vbCrLf & _
+               "YES = keep all features + offset" & vbCrLf & _
+               "NO  = offset outline only", _
+               vbYesNoCancel + vbQuestion, "Crude precut")
+
+    Select Case r
+
+        Case vbYes
+
+            g_precutKeepFeats = True
+
+        Case vbNo
+
+            g_precutKeepFeats = False
+
+        Case vbCancel
+
+            AskPrecutSettings = False
+
+            Exit Function
+
+    End Select
+
+    AskPrecutSettings = True
+
+End Function
+
+
+
+' ================================================================
+' Hidden-component check. SOLIDWORKS Component2.Visible returns:
+'   1 = visible, 2 = hidden, 3 = visible-with-an-ambiguous-parent
+' We treat both 2 and 3 as "skip" so a part hidden by the user (or whose
+' parent assembly hid it) does not get counted or saved as a DXF.
+Function IsComponentHiddenSafe(swComp As Object) As Boolean
+    IsComponentHiddenSafe = False
+    If swComp Is Nothing Then Exit Function
+    Dim v As Long
+    v = 1
+    On Error Resume Next
+    v = CLng(swComp.Visible)
+    On Error GoTo 0
+    If v = 2 Then IsComponentHiddenSafe = True
+End Function
+
+' ================================================================
+
+Function BuildQtyDict(swModel As Object) As Object
+
+    Dim d As Object
+
+    Set d = CreateObject("Scripting.Dictionary")
+
+    swModel.ResolveAllLightWeightComponents True
+
+    Dim vc As Variant
+
+    vc = swModel.GetComponents(False)
+
+    If IsEmpty(vc) Then
+
+        Set BuildQtyDict = d
+
+        Exit Function
+
+    End If
+
+    Dim i As Long
+
+    Dim c As Object
+
+    For i = 0 To UBound(vc)
+
+        Set c = vc(i)
+
+        If Not c Is Nothing Then
+
+            If (Not c.IsSuppressed) And (Not IsComponentHiddenSafe(c)) Then
+
+                Dim p As String
+
+                p = c.GetPathName
+
+                If p = "" Then GoTo NextQtyComp
+
+                If Not IsPartPath(p) Then GoTo NextQtyComp
+
+                Dim k As String
+                k = LCase(p) & "@" & c.ReferencedConfiguration
+                If d.Exists(k) Then
+
+                    d(k) = d(k) + 1
+
+                Else
+
+                    d.Add k, 1
+
+                End If
+
+            End If
+
+        End If
+
+NextQtyComp:
+
+    Next i
+    Set BuildQtyDict = d
+
+End Function
+
+
+
+' ================================================================
+
+Function BuildVisibleOpenPartWindowPathDict() As Object
+
+    Dim d As Object
+
+    Set d = CreateObject("Scripting.Dictionary")
+
+    Dim swDoc As Object
+
+    On Error Resume Next
+
+    Set swDoc = swApp.GetFirstDocument
+
+    Do While Not swDoc Is Nothing
+
+        If swDoc.GetType = swDocPART Then
+
+            Dim isVisible As Boolean
+
+            isVisible = False
+
+            Err.Clear
+
+            isVisible = CBool(swDoc.Visible)
+
+            If Err.Number <> 0 Then
+
+                Err.Clear
+
+                isVisible = False
+
+            End If
+
+            If isVisible Then
+
+                Dim pathName As String
+
+                pathName = swDoc.GetPathName
+
+                If IsPartPath(pathName) Then
+
+                    If Not d.Exists(LCase(pathName)) Then d.Add LCase(pathName), pathName
+
+                End If
+
+            End If
+
+        End If
+
+        Set swDoc = swDoc.GetNext
+
+    Loop
+
+    On Error GoTo 0
+
+    Debug.Print "Initially visible part windows: " & d.Count
+
+    Set BuildVisibleOpenPartWindowPathDict = d
+
+End Function
+
+Function BuildAssemblyPartPathDict(swModel As Object) As Object
+
+    Dim d As Object
+
+    Set d = CreateObject("Scripting.Dictionary")
+
+    If swModel Is Nothing Then
+
+        Set BuildAssemblyPartPathDict = d
+
+        Exit Function
+
+    End If
+
+    If swModel.GetType <> swDocASSEMBLY Then
+
+        Set BuildAssemblyPartPathDict = d
+
+        Exit Function
+
+    End If
+
+    On Error Resume Next
+
+    swModel.ResolveAllLightWeightComponents True
+
+    On Error GoTo 0
+
+    Dim vComps As Variant
+
+    vComps = swModel.GetComponents(False)
+
+    If IsEmpty(vComps) Then
+
+        Set BuildAssemblyPartPathDict = d
+
+        Exit Function
+
+    End If
+
+    Dim i As Long
+
+    For i = 0 To UBound(vComps)
+
+        Dim swComp As Object
+
+        Set swComp = vComps(i)
+
+        If Not swComp Is Nothing Then
+
+            If Not swComp.IsSuppressed Then
+
+                Dim partPath As String
+
+                partPath = swComp.GetPathName
+
+                If partPath <> "" And IsPartPath(partPath) Then
+
+                    If Not d.Exists(LCase(partPath)) Then d.Add LCase(partPath), partPath
+
+                End If
+
+            End If
+
+        End If
+
+    Next i
+
+    Debug.Print "Assembly part documents tracked for cleanup: " & d.Count
+
+    Set BuildAssemblyPartPathDict = d
+
+End Function
+
+Sub CloseAssemblyPartDocs(dictAssemblyParts As Object, dictInitiallyVisiblePartWindows As Object)
+
+    If dictAssemblyParts Is Nothing Then Exit Sub
+
+    Debug.Print "Closing open part docs from starting assembly..."
+
+    Dim k As Variant
+
+    For Each k In dictAssemblyParts.Keys
+
+        If Not dictInitiallyVisiblePartWindows Is Nothing Then
+
+            If dictInitiallyVisiblePartWindows.Exists(CStr(k)) Then
+
+                Debug.Print "  Leaving initially visible part window open: " & CStr(dictAssemblyParts(k))
+
+                GoTo NextDoc
+
+            End If
+
+        End If
+
+        Dim swDoc As Object
+
+        Set swDoc = Nothing
+
+        On Error Resume Next
+
+        Set swDoc = swApp.GetOpenDocumentByName(CStr(dictAssemblyParts(k)))
+
+        On Error GoTo 0
+
+        If Not swDoc Is Nothing Then
+
+            If swDoc.GetType = swDocPART Then
+
+                Debug.Print "  Closing assembly part: " & swDoc.GetTitle
+
+                swApp.CloseDoc swDoc.GetTitle
+
+            End If
+
+        End If
+
+NextDoc:
+
+    Next k
+
+End Sub
+
+' ================================================================
+
+Sub ProcessSelectedComponents(swModel As Object, selMgr As Object, selCount As Long, _
+                              dxfFolder As String, mode As Integer, _
+                              dictQty As Object, dictDone As Object, dictOpened As Object)
+
+    Dim s As Long
+
+    For s = 1 To selCount
+
+        Debug.Print "  --- Sel " & s & " ---"
+
+
+
+        Dim selObj As Object
+
+        Set selObj = Nothing
+
+        Dim selType As Long
+
+        selType = -1
+
+        On Error Resume Next
+
+        Set selObj = selMgr.GetSelectedObject6(s, -1)
+
+        selType = selMgr.GetSelectedObjectType3(s, -1)
+
+        On Error GoTo 0
+
+        Debug.Print "    SelType=" & selType
+
+
+
+        Dim swComp As Object
+
+        Set swComp = Nothing
+
+
+
+        On Error Resume Next
+
+        Set swComp = selMgr.GetSelectedObjectsComponent4(s, -1)
+
+        On Error GoTo 0
+
+        If Not swComp Is Nothing Then
+
+            Debug.Print "    via Comp4(-1)"
+
+            GoTo HaveComp
+
+        End If
+
+
+
+        On Error Resume Next
+
+        Set swComp = selMgr.GetSelectedObjectsComponent4(s, 0)
+
+        On Error GoTo 0
+
+        If Not swComp Is Nothing Then
+
+            Debug.Print "    via Comp4(0)"
+
+            GoTo HaveComp
+
+        End If
+
+
+
+        If Not selObj Is Nothing Then
+
+            On Error Resume Next
+
+            Set swComp = selObj.GetComponent
+
+            On Error GoTo 0
+
+            If Not swComp Is Nothing Then
+
+                Debug.Print "    via GetComponent"
+
+                GoTo HaveComp
+
+            End If
+
+        End If
+
+
+
+        If selType = 20 Then
+
+            Set swComp = selObj
+
+            If Not swComp Is Nothing Then
+
+                Debug.Print "    sel IS comp"
+
+                GoTo HaveComp
+
+            End If
+
+        End If
+
+
+
+        Debug.Print "    No component, skip"
+
+        GoTo NextSel
+
+
+
+HaveComp:
+
+        If swComp.IsSuppressed Then GoTo NextSel
+        If IsComponentHiddenSafe(swComp) Then
+            Debug.Print "    Component hidden, skip"
+            GoTo NextSel
+        End If
+
+        Dim partPath As String
+
+        partPath = swComp.GetPathName
+
+        Dim cfg As String
+
+        cfg = swComp.ReferencedConfiguration
+
+        If partPath = "" Then GoTo NextSel
+
+
+
+        If Not IsPartPath(partPath) Then
+
+            Debug.Print "    Not a part file, skip: " & partPath
+
+            GoTo NextSel
+
+        End If
+
+        Dim fullKey As String
+        fullKey = LCase(partPath) & "@" & cfg
+
+        If dictDone.Exists(fullKey) Then GoTo NextSel
+
+        dictDone.Add fullKey, True
+
+
+
+        Dim qty As Long
+
+        If dictQty.Exists(fullKey) Then
+
+            qty = dictQty(fullKey)
+
+        Else
+
+            qty = 1
+
+        End If
+
+
+
+        Debug.Print "    " & partPath & " @ " & cfg & " qty=" & qty
+
+
+
+        Dim swPart As Object
+
+        Set swPart = OpenPartForExport(partPath, dictOpened)
+
+        If swPart Is Nothing Then GoTo NextSel
+
+
+
+        swPart.ShowConfiguration2 cfg
+
+        swPart.EditRebuild3
+
+        swPart.ForceRebuild3 False
+
+
+
+        ExportOnePart swPart, partPath, cfg, qty, dxfFolder, mode
+
+NextSel:
+
+    Next s
+
+End Sub
+
+
+
+' ================================================================
+
+Sub ProcessFullAssembly(swModel As Object, dxfFolder As String, _
+                        dictDone As Object, dictOpened As Object)
+
+
+
+    swModel.ResolveAllLightWeightComponents True
+
+    Dim vComps As Variant
+
+    vComps = swModel.GetComponents(False)
+
+    If IsEmpty(vComps) Then
+
+        Debug.Print "Total components: 0"
+
+        Exit Sub
+
+    End If
+
+    Debug.Print "Total components: " & (UBound(vComps) + 1)
+
+
+    Dim dictQty As Object
+
+    Set dictQty = BuildQtyDict(swModel)
+
+
+
+    Dim i As Long
+
+    Dim swComp As Object
+
+    For i = 0 To UBound(vComps)
+
+        Set swComp = vComps(i)
+
+        If swComp Is Nothing Then GoTo NextComp
+
+        If swComp.IsSuppressed Then GoTo NextComp
+
+        If IsComponentHiddenSafe(swComp) Then
+            Debug.Print "[" & i & "] Component hidden, skip"
+            GoTo NextComp
+        End If
+
+
+
+        Dim partPath As String
+
+        partPath = swComp.GetPathName
+
+        Dim cfg As String
+
+        cfg = swComp.ReferencedConfiguration
+
+
+
+        Dim fullKey As String
+
+        fullKey = LCase(partPath) & "@" & cfg
+
+        If partPath = "" Then GoTo NextComp
+
+        If Not IsPartPath(partPath) Then
+
+            Debug.Print "[" & i & "] Not a part file, skip: " & partPath
+
+            GoTo NextComp
+
+        End If
+
+        If dictDone.Exists(fullKey) Then GoTo NextComp
+        dictDone.Add fullKey, True
+
+
+
+        Debug.Print "[" & i & "] " & partPath & " @ " & cfg
+
+
+
+        Dim swPartCheck As Object
+
+        Set swPartCheck = swComp.GetModelDoc2
+
+        If swPartCheck Is Nothing Then GoTo NextComp
+
+        If swPartCheck.GetType <> swDocPART Then
+
+            Debug.Print "  referenced model is not a part, skip"
+
+            GoTo NextComp
+
+        End If
+
+        swPartCheck.ShowConfiguration2 cfg
+
+
+        Dim isSM As Boolean
+
+        isSM = IsSheetMetalSafe(swPartCheck)
+        Dim isThin As Boolean
+
+        isThin = False
+
+        If Not isSM Then
+
+            isThin = IsThinPlateLike(swPartCheck)
+        End If
+
+        If Not isSM And Not isThin Then
+
+            Debug.Print "  not SM/plate-like thin solid, skip"
+            GoTo NextComp
+
+        End If
+
+
+
+        Dim qty As Long
+
+        qty = dictQty(fullKey)
+
+        Dim swPart As Object
+
+        Set swPart = OpenPartForExport(partPath, dictOpened)
+
+        If swPart Is Nothing Then GoTo NextComp
+
+
+
+        swPart.ShowConfiguration2 cfg
+
+        swPart.EditRebuild3
+
+        swPart.ForceRebuild3 False
+
+
+
+        ExportOnePart swPart, partPath, cfg, qty, dxfFolder, MODE_REGULAR
+
+NextComp:
+
+    Next i
+
+End Sub
+
+
+
+' ================================================================
+
+Sub ProcessSinglePart(swPart As Object, partPath As String, cfg As String, _
+                      qty As Long, dxfFolder As String, mode As Integer, _
+                      dictDone As Object)
+
+    Dim fullKey As String
+
+    fullKey = LCase(partPath) & "@" & cfg
+
+    If dictDone.Exists(fullKey) Then Exit Sub
+
+    dictDone.Add fullKey, True
+
+    swPart.ShowConfiguration2 cfg
+
+    swPart.EditRebuild3
+
+    swPart.ForceRebuild3 False
+
+    ExportOnePart swPart, partPath, cfg, qty, dxfFolder, mode
+
+End Sub
+
+
+
+' ================================================================
+
+Function OpenPartForExport(partPath As String, dictOpened As Object) As Object
+
+    If Not IsPartPath(partPath) Then
+
+        Set OpenPartForExport = Nothing
+
+        Exit Function
+
+    End If
+
+    Dim already As Object
+    Set already = swApp.GetOpenDocumentByName(partPath)
+
+    If Not already Is Nothing Then
+
+        Set OpenPartForExport = already
+
+        Exit Function
+
+    End If
+
+
+
+    Dim errs As Long
+
+    Dim warns As Long
+
+    Dim p As Object
+
+    Set p = swApp.OpenDoc6(partPath, swDocPART, 1, "", errs, warns)
+
+    If p Is Nothing Then
+
+        Set OpenPartForExport = Nothing
+
+        Exit Function
+
+    End If
+
+
+
+    swApp.ActivateDoc3 partPath, True, 1, errs
+
+    If Not dictOpened.Exists(LCase(partPath)) Then
+
+        dictOpened.Add LCase(partPath), p.GetTitle
+
+    End If
+
+    Set OpenPartForExport = p
+
+End Function
+
+
+
+' ================================================================
+
+Sub ExportOnePart(swPart As Object, partPath As String, cfg As String, _
+                  qty As Long, dxfFolder As String, mode As Integer)
+
+
+
+    Dim isSM As Boolean
+
+    isSM = IsSheetMetalSafe(swPart)
+    Dim isThin As Boolean
+
+    isThin = False
+
+    If Not isSM Then
+
+        isThin = IsThinPlateLike(swPart)
+    End If
+
+
+
+    If mode = MODE_REGULAR Then
+
+        If Not isSM And Not isThin Then
+
+            Debug.Print "    Regular: not SM/plate-like thin solid, skip"
+            Exit Sub
+
+        End If
+
+    End If
+
+
+
+    Dim partName As String
+
+    partName = Replace(swPart.GetTitle, ".SLDPRT", "")
+
+    partName = Replace(partName, ".sldprt", "")
+
+    partName = CleanFileName(partName)
+
+    Dim cfgName As String
+
+    cfgName = CleanFileName(cfg)
+
+
+    Dim thickness As Double
+
+    Dim thickStr As String
+
+    If isSM Then
+
+        thickness = GetSheetMetalThicknessFallback(swPart)
+    Else
+
+        thickness = GetThinSolidThickness(swPart)
+
+    End If
+
+    thickStr = FormatThickness(thickness)
+
+
+
+    Dim suffix As String
+
+    If mode = MODE_PRECUT Then
+
+        suffix = "_PRECUT" & CLng(g_precutOffset_mm)
+
+        If Not g_precutKeepFeats Then suffix = suffix & "_BBOX"
+
+    End If
+
+
+
+    Dim outPath As String
+
+    Dim outFolder As String
+
+    outFolder = dxfFolder
+
+    If isSM Then
+
+        outFolder = EnsureSubFolder(dxfFolder, "bended")
+
+        Debug.Print "    Sheet metal -> bended folder"
+
+    ElseIf isThin Then
+
+        If IsWasherLikeThinSolid(swPart) Then
+
+            outFolder = EnsureSubFolder(dxfFolder, "washerlike")
+
+            Debug.Print "    Washerlike thin solid -> washerlike folder"
+
+        End If
+
+    End If
+
+    outPath = outFolder & DXF_OUTPUT_PREFIX & thickStr & "_" & g_material & "_" & qty & "db_" & partName & "(" & cfgName & ")" & suffix & ".dxf"
+    Debug.Print "    Output: " & outPath
+
+
+
+    Dim ok As Boolean
+
+    If mode = MODE_REGULAR Then
+
+        If isSM Then
+
+            ok = ExportSMFlatPattern(swPart, outPath)
+
+        Else
+
+            ok = ExportThinSolidRegularDxf(swPart, outPath)
+
+        End If
+
+    Else
+
+        ok = ExportPartPrecut(swPart, outPath, isSM)
+
+    End If
+
+    Debug.Print "    RESULT: " & IIf(ok, "OK", "FAILED")
+
+End Sub
+
+
+
+' ================================================================
+
+Function ExportSMFlatPattern(swPart As Object, filePath As String) As Boolean
+
+    Debug.Print "      --- ExportSMFlatPattern ---"
+
+    DeleteExistingFile filePath
+
+    swPart.ClearSelection2 True
+
+    Dim bRet As Boolean
+
+    On Error Resume Next
+
+    bRet = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportSheetMetal, True, Empty, False, False, SHEET_METAL_EXPORT_OPTIONS, Empty)
+
+    On Error GoTo 0
+
+    Debug.Print "      ExportToDWG2 direct=" & bRet & " file=" & (Dir(filePath) <> "")
+
+    If bRet And Dir(filePath) <> "" Then
+
+        ExportSMFlatPattern = True
+
+        Exit Function
+
+    End If
+
+    Dim swFeat As Object
+
+    Set swFeat = FindFlatPatternFeat(swPart)
+
+    If swFeat Is Nothing Then
+
+        Debug.Print "      No FlatPattern feature found"
+
+        Exit Function
+
+    End If
+
+    Dim wasSupp As Boolean
+
+    wasSupp = swFeat.IsSuppressed
+
+    If wasSupp Then
+
+        swFeat.SetSuppression2 2, 2, Nothing
+
+        swPart.EditRebuild3
+
+    End If
+
+    DeleteExistingFile filePath
+
+    swPart.ClearSelection2 True
+
+    swFeat.Select True
+
+    swPart.EditRebuild3
+
+    On Error Resume Next
+
+    bRet = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportSheetMetal, True, Empty, False, False, SHEET_METAL_EXPORT_OPTIONS, Empty)
+
+    On Error GoTo 0
+
+    Debug.Print "      ExportToDWG2 selected flat=" & bRet & " file=" & (Dir(filePath) <> "")
+
+    If bRet And Dir(filePath) <> "" Then
+
+        ExportSMFlatPattern = True
+
+        GoTo RestoreFlatPattern
+
+    End If
+
+    DeleteExistingFile filePath
+
+    Dim errs As Long
+
+    Dim warns As Long
+
+    On Error Resume Next
+
+    bRet = swPart.ExportFlatPatternView(filePath, swExportFlatPatternOption_RemoveBends)
+
+    If bRet Then swPart.Extension.SaveAs filePath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, errs, warns
+
+    On Error GoTo 0
+
+    Debug.Print "      ExportFlatPatternView fallback=" & bRet & " file=" & (Dir(filePath) <> "")
+
+    ExportSMFlatPattern = (bRet And Dir(filePath) <> "")
+
+RestoreFlatPattern:
+
+    swPart.ClearSelection2 True
+
+    If wasSupp Then
+
+        swFeat.SetSuppression2 0, 2, Nothing
+
+        swPart.EditRebuild3
+
+    End If
+
+End Function
+
+
+
+' ================================================================
+
+Function ExportBestViewFast(swPart As Object, filePath As String) As Boolean
+
+    Dim cutFace As Object
+
+    Set cutFace = FindLargestPlanarFace(swPart)
+
+    If Not cutFace Is Nothing Then
+
+        If ExportSelectedFaceToDxf(swPart, cutFace, filePath) Then
+
+            ExportBestViewFast = True
+
+            Exit Function
+
+        End If
+
+        Debug.Print "      Selected-face DXF failed, trying annotation views"
+
+    End If
+
+    Dim box As Variant
+    box = SafeGetPartBox(swPart)
+
+    If IsEmpty(box) Then
+
+        ExportBestViewFast = False
+
+        Exit Function
+
+    End If
+
+
+
+    Dim x As Double
+
+    Dim y As Double
+
+    Dim z As Double
+
+    x = Abs(box(3) - box(0))
+
+    y = Abs(box(4) - box(1))
+
+    z = Abs(box(5) - box(2))
+
+
+
+    Dim pV As Variant
+
+    Dim fV As Variant
+
+    If x <= y And x <= z Then
+
+        pV = Array("*Right", "*Left")
+
+        fV = Array("*Top", "*Bottom", "*Front", "*Back")
+
+    ElseIf y <= x And y <= z Then
+
+        pV = Array("*Top", "*Bottom")
+
+        fV = Array("*Front", "*Back", "*Right", "*Left")
+
+    Else
+
+        pV = Array("*Front", "*Back")
+
+        fV = Array("*Top", "*Bottom", "*Right", "*Left")
+
+    End If
+
+
+
+    If TryViews(swPart, filePath, pV) Then
+
+        ExportBestViewFast = True
+
+        Exit Function
+
+    End If
+
+    If TryViews(swPart, filePath, fV) Then
+
+        ExportBestViewFast = True
+
+        Exit Function
+
+    End If
+
+    ExportBestViewFast = False
+
+End Function
+
+Function ExportProjectedViewFast(swPart As Object, filePath As String) As Boolean
+
+    Debug.Print "      --- ExportProjectedViewFast ---"
+
+    Dim box As Variant
+    box = SafeGetPartBox(swPart)
+
+    If IsEmpty(box) Then Exit Function
+
+    Dim x As Double
+
+    Dim y As Double
+
+    Dim z As Double
+
+    x = Abs(box(3) - box(0))
+
+    y = Abs(box(4) - box(1))
+
+    z = Abs(box(5) - box(2))
+
+    Dim pV As Variant
+
+    Dim fV As Variant
+
+    If x <= y And x <= z Then
+
+        pV = Array("*Right", "*Left")
+
+        fV = Array("*Top", "*Bottom", "*Front", "*Back")
+
+    ElseIf y <= x And y <= z Then
+
+        pV = Array("*Top", "*Bottom")
+
+        fV = Array("*Front", "*Back", "*Right", "*Left")
+
+    Else
+
+        pV = Array("*Front", "*Back")
+
+        fV = Array("*Top", "*Bottom", "*Right", "*Left")
+
+    End If
+
+    If TryViews(swPart, filePath, pV) Then
+
+        ExportProjectedViewFast = True
+
+        Exit Function
+
+    End If
+
+    If TryViews(swPart, filePath, fV) Then
+
+        ExportProjectedViewFast = True
+
+        Exit Function
+
+    End If
+
+End Function
+
+
+
+Function TryViews(swPart As Object, filePath As String, viewsArr As Variant) As Boolean
+
+    Dim i As Integer
+
+    For i = 0 To UBound(viewsArr)
+
+        Debug.Print "      Trying annotation view: " & viewsArr(i)
+
+        Dim oneView(0) As String
+
+        oneView(0) = CStr(viewsArr(i))
+
+        Dim varViews As Variant
+
+        varViews = oneView
+
+        Dim varAlignment As Variant
+
+        varAlignment = DefaultDwgAlignment()
+
+        DeleteExistingFile filePath
+
+        Dim ok As Boolean
+
+        On Error Resume Next
+
+        ok = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportAnnotationViews, True, varAlignment, False, False, 0, varViews)
+
+        On Error GoTo 0
+
+        If ok And Dir(filePath) <> "" Then
+
+            Debug.Print "      Annotation view used: " & viewsArr(i)
+
+            TryViews = True
+
+            Exit Function
+
+        End If
+
+    Next i
+
+    TryViews = False
+
+End Function
+
+Function TryDrawingViews(swPart As Object, filePath As String, viewsArr As Variant) As Boolean
+    Dim i As Integer
+
+    For i = 0 To UBound(viewsArr)
+
+        Dim swDraw As Object
+
+        Set swDraw = swApp.NewDocument(GetDrawingTemplatePath(), 0, 0, 0)
+
+        If swDraw Is Nothing Then GoTo NextView
+
+
+
+        Dim swView As Object
+
+        Set swView = swDraw.CreateDrawViewFromModelView3(swPart.GetPathName, viewsArr(i), 0.2, 0.2, 0)
+
+        If Not swView Is Nothing Then
+
+            swDraw.EditRebuild3
+
+            Dim outline As Variant
+
+            outline = swView.GetOutline
+
+            If Not IsEmpty(outline) Then
+
+                Dim area As Double
+
+                area = Abs(outline(2) - outline(0)) * Abs(outline(3) - outline(1))
+
+                If area > 0 Then
+
+                    Dim errs As Long
+
+                    Dim warns As Long
+
+                    swDraw.Extension.SaveAs filePath, 0, 0, Nothing, errs, warns
+
+                    swApp.CloseDoc swDraw.GetTitle
+
+                    If Dir(filePath) <> "" Then
+
+                        TryDrawingViews = True
+                        Exit Function
+
+                    End If
+
+                    GoTo NextView
+
+                End If
+
+            End If
+
+        End If
+
+        swApp.CloseDoc swDraw.GetTitle
+
+NextView:
+
+    Next i
+
+    TryDrawingViews = False
+End Function
+
+
+
+' ================================================================
+
+Function ExportSelectedFaceToDxf(swPart As Object, swFace As Object, filePath As String) As Boolean
+
+    DeleteExistingFile filePath
+
+    swPart.ClearSelection2 True
+
+    Dim selOk As Boolean
+
+    On Error Resume Next
+
+    selOk = swFace.Select4(False, Nothing)
+
+    If Not selOk Then
+
+        Err.Clear
+
+        selOk = swFace.Select(False)
+
+    End If
+
+    On Error GoTo 0
+
+    If Not selOk Then
+
+        Debug.Print "      Could not select planar face for DXF"
+
+        Exit Function
+
+    End If
+
+    Dim varAlignment As Variant
+
+    varAlignment = DefaultDwgAlignment()
+
+    Dim ok As Boolean
+
+    On Error Resume Next
+
+    ok = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportSelectedFacesOrLoops, True, varAlignment, False, False, 0, Empty)
+
+    On Error GoTo 0
+
+    swPart.ClearSelection2 True
+
+    ExportSelectedFaceToDxf = (ok And Dir(filePath) <> "")
+
+End Function
+
+Function FindLargestPlanarFace(swPart As Object) As Object
+
+    Dim bodies As Variant
+
+    bodies = GetPartBodies(swPart)
+
+    If IsEmpty(bodies) Then Exit Function
+
+    Dim maxArea As Double
+
+    maxArea = 0#
+
+    Dim i As Long
+
+    For i = 0 To UBound(bodies)
+
+        Dim b As Object
+
+        Set b = bodies(i)
+
+        If Not b Is Nothing Then
+
+            Dim faces As Variant
+
+            faces = Empty
+
+            On Error Resume Next
+
+            faces = b.GetFaces
+
+            On Error GoTo 0
+
+            If Not IsEmpty(faces) Then
+
+                Dim j As Long
+
+                For j = 0 To UBound(faces)
+
+                    Dim f As Object
+
+                    Set f = faces(j)
+
+                    If IsPlanarFace(f) Then
+
+                        Dim a As Double
+
+                        On Error Resume Next
+
+                        a = f.GetArea
+
+                        On Error GoTo 0
+
+                        If a > maxArea Then
+
+                            maxArea = a
+
+                            Set FindLargestPlanarFace = f
+
+                        End If
+
+                    End If
+
+                Next j
+
+            End If
+
+        End If
+
+    Next i
+
+End Function
+
+Function IsPlanarFace(swFace As Object) As Boolean
+
+    If swFace Is Nothing Then Exit Function
+
+    Dim surf As Object
+
+    On Error Resume Next
+
+    Set surf = swFace.GetSurface
+
+    If Not surf Is Nothing Then IsPlanarFace = surf.IsPlane
+
+    On Error GoTo 0
+
+End Function
+
+Function DefaultDwgAlignment() As Variant
+
+    Dim data(11) As Double
+
+    DefaultDwgAlignment = data
+
+End Function
+
+Function GetPartBodies(swPart As Object) As Variant
+
+    Dim bodies As Variant
+
+    On Error Resume Next
+
+    bodies = swPart.GetBodies2(0, False)
+
+    On Error GoTo 0
+
+    If IsEmpty(bodies) Then
+
+        On Error Resume Next
+
+        bodies = swPart.GetBodies(0)
+
+        On Error GoTo 0
+
+    End If
+
+    If IsEmpty(bodies) Then
+
+        GetPartBodies = Empty
+
+    Else
+
+        GetPartBodies = bodies
+
+    End If
+
+End Function
+
+Function IsPartPath(pathName As String) As Boolean
+
+    IsPartPath = (LCase(Right(pathName, 6)) = "sldprt")
+
+End Function
+
+Function IsImportedPartPath(pathName As String) As Boolean
+
+    Dim p As String
+
+    p = LCase(pathName)
+
+    If InStr(1, p, ".stp.", vbTextCompare) > 0 Then IsImportedPartPath = True
+    If InStr(1, p, ".step.", vbTextCompare) > 0 Then IsImportedPartPath = True
+    If InStr(1, p, "\ic~~\", vbTextCompare) > 0 Then IsImportedPartPath = True
+    If InStr(1, p, "\swx", vbTextCompare) > 0 And InStr(1, p, "\appdata\local\temp\", vbTextCompare) > 0 Then IsImportedPartPath = True
+
+End Function
+
+Function IsImportedGeometryPart(swPart As Object) As Boolean
+
+    If swPart Is Nothing Then Exit Function
+
+    Dim pathName As String
+
+    On Error Resume Next
+
+    pathName = swPart.GetPathName
+
+    On Error GoTo 0
+
+    If IsImportedPartPath(pathName) Then
+
+        IsImportedGeometryPart = True
+
+        Exit Function
+
+    End If
+
+    Dim f As Object
+
+    Set f = swPart.FirstFeature
+
+    Do While Not f Is Nothing
+
+        Dim typeName As String
+
+        Dim featName As String
+
+        On Error Resume Next
+
+        typeName = LCase(f.GetTypeName2)
+        featName = LCase(f.Name)
+
+        On Error GoTo 0
+
+        If InStr(1, typeName, "import", vbTextCompare) > 0 Then
+
+            IsImportedGeometryPart = True
+
+            Exit Function
+
+        End If
+
+        If Left(featName, 8) = "imported" Then
+
+            IsImportedGeometryPart = True
+
+            Exit Function
+
+        End If
+
+        If InStr(1, featName, ".stp", vbTextCompare) > 0 Or InStr(1, featName, ".step", vbTextCompare) > 0 Then
+
+            IsImportedGeometryPart = True
+
+            Exit Function
+
+        End If
+
+        Set f = f.GetNextFeature
+
+    Loop
+
+End Function
+
+Function CleanFileName(value As String) As String
+
+    Dim badChars As Variant
+
+    badChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+
+    Dim result As String
+
+    result = value
+
+    Dim i As Long
+
+    For i = 0 To UBound(badChars)
+
+        result = Replace(result, CStr(badChars(i)), "_")
+
+    Next i
+
+    CleanFileName = Trim(result)
+
+    If CleanFileName = "" Then CleanFileName = "Default"
+
+End Function
+
+Function SaveDrawingAsDxf1To1(swDoc As Object, filePath As String) As Boolean
+
+    Dim oldNoScale As Long
+
+    Dim gotNoScale As Boolean
+
+    On Error Resume Next
+
+    Err.Clear
+
+    oldNoScale = swApp.GetUserPreferenceIntegerValue(swDxfOutputNoScale)
+
+    gotNoScale = (Err.Number = 0)
+
+    Err.Clear
+
+    swApp.SetUserPreferenceIntegerValue swDxfOutputNoScale, 1
+
+    On Error GoTo 0
+
+    DeleteExistingFile filePath
+
+    Dim errs As Long
+
+    Dim warns As Long
+
+    On Error Resume Next
+
+    swDoc.Extension.SaveAs filePath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, errs, warns
+
+    On Error GoTo 0
+
+    SaveDrawingAsDxf1To1 = (Dir(filePath) <> "")
+
+    If gotNoScale Then
+
+        On Error Resume Next
+
+        swApp.SetUserPreferenceIntegerValue swDxfOutputNoScale, oldNoScale
+
+        On Error GoTo 0
+
+    End If
+
+End Function
+
+Sub DeleteExistingFile(filePath As String)
+
+    On Error Resume Next
+
+    If Dir(filePath) <> "" Then Kill filePath
+
+    On Error GoTo 0
+
+End Sub
+
+' ================================================================
+
+Function ExportPartPrecut(swPart As Object, filePath As String, isSM As Boolean) As Boolean
+    Debug.Print "      --- ExportPartPrecut ---"
+
+    ExportPartPrecut = ExportPartPrecutSimple(swPart, filePath, isSM)
+
+    Exit Function
+
+
+
+    Dim flatFeat As Object
+
+    Dim wasSupp As Boolean
+
+    wasSupp = False
+
+    If isSM Then
+
+        Set flatFeat = FindFlatPatternFeat(swPart)
+
+        If flatFeat Is Nothing Then
+
+            Debug.Print "      No FlatPattern"
+
+            ExportPartPrecut = False
+
+            Exit Function
+
+        End If
+
+        wasSupp = flatFeat.IsSuppressed
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 2, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+    End If
+
+
+
+    Dim swDraw As Object
+
+    Set swDraw = swApp.NewDocument(GetDrawingTemplatePath(), 0, 0, 0)
+
+    If swDraw Is Nothing Then
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+
+
+    Dim swDoc As Object
+
+    Set swDoc = swDraw
+
+    Dim swSheet As Object
+
+    Set swSheet = swDraw.GetCurrentSheet
+
+    Dim shW As Double
+
+    Dim shH As Double
+
+    swSheet.GetSize shW, shH
+
+    On Error Resume Next
+
+    swSheet.SetScale 1#, 1#, False, False
+
+    On Error GoTo 0
+
+
+    Dim viewName As String
+
+    If isSM Then
+
+        viewName = "*Front"
+
+    Else
+
+        viewName = PickBestViewName(swPart)
+
+    End If
+
+
+
+    Dim swView As Object
+
+    Set swView = swDraw.CreateDrawViewFromModelView3(swPart.GetPathName, viewName, shW / 2, shH / 2, 0)
+
+    swDraw.EditRebuild3
+
+
+
+    If swView Is Nothing And isSM Then
+
+        Set swView = swDraw.CreateDrawViewFromModelView3(swPart.GetPathName, "Flat pattern", shW / 2, shH / 2, 0)
+
+        swDraw.EditRebuild3
+
+    End If
+
+
+
+    If swView Is Nothing Then
+
+        Debug.Print "      View failed"
+
+        swApp.CloseDoc swDraw.GetTitle
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+
+
+    On Error Resume Next
+
+    swView.UseSheetScale = False
+
+    On Error GoTo 0
+
+    Dim sv(1) As Double
+
+    sv(0) = 1
+
+    sv(1) = 1
+
+    swView.ScaleRatio = sv
+
+    swDraw.EditRebuild3
+
+
+
+    swDoc.ActivateView swView.GetName2
+
+
+
+    Dim outerEdges As Variant
+
+    outerEdges = GetOuterEdgesInView(swView)
+
+    If IsEmpty(outerEdges) Then
+
+        Debug.Print "      No outer edges in view"
+
+        swApp.CloseDoc swDraw.GetTitle
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+    Debug.Print "      Outer edges: " & (UBound(outerEdges) + 1)
+
+
+
+    swDoc.ClearSelection2 True
+
+    Dim swSelData As Object
+
+    Set swSelData = swDoc.SelectionManager.CreateSelectData
+
+    swSelData.View = swView
+
+
+
+    Dim firstEdge As Object
+
+    Set firstEdge = outerEdges(0)
+
+    firstEdge.Select4 False, swSelData
+
+
+
+    Dim okConv As Boolean
+
+    On Error Resume Next
+
+    okConv = swDoc.SketchManager.SketchUseEdge3(True, False)
+
+    On Error GoTo 0
+
+    Debug.Print "      SketchUseEdge3 chain ok=" & okConv
+
+
+
+    If Not okConv Then
+
+        swDoc.ClearSelection2 True
+
+        Dim ei As Long
+
+        For ei = 0 To UBound(outerEdges)
+
+            Dim e As Object
+
+            Set e = outerEdges(ei)
+
+            e.Select4 True, swSelData
+
+        Next ei
+
+        On Error Resume Next
+
+        okConv = swDoc.SketchManager.SketchUseEdge3(False, False)
+
+        On Error GoTo 0
+
+        Debug.Print "      SketchUseEdge3 multi ok=" & okConv
+
+    End If
+
+
+
+    If Not okConv Then
+
+        Debug.Print "      Could not convert edges"
+
+        swApp.CloseDoc swDraw.GetTitle
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+
+
+    Dim sketch As Object
+
+    Set sketch = swDoc.SketchManager.ActiveSketch
+
+    If sketch Is Nothing Then
+
+        Debug.Print "      No active sketch after convert"
+
+        swApp.CloseDoc swDraw.GetTitle
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+
+
+    swDoc.ClearSelection2 True
+
+    SelectAllSketchSegmentsInView sketch, swSelData
+
+
+
+    Dim offsetMeters As Double
+
+    offsetMeters = g_precutOffset_mm / 1000#
+
+
+
+    Dim okOffset As Boolean
+
+    On Error Resume Next
+
+    okOffset = swDoc.SketchManager.SketchOffset2(offsetMeters, False, 0, False, False, True, False)
+
+    On Error GoTo 0
+
+    Debug.Print "      SketchOffset2 ok=" & okOffset
+
+
+
+    If Not okOffset Then
+
+        swDoc.ClearSelection2 True
+
+        SelectAllSketchSegmentsInView sketch, swSelData
+
+        On Error Resume Next
+
+        okOffset = swDoc.SketchManager.SketchOffset2(offsetMeters, False, 0, False, True, True, False)
+
+        On Error GoTo 0
+
+        Debug.Print "      SketchOffset2 reversed ok=" & okOffset
+
+    End If
+
+
+
+    If Not okOffset Then
+
+        Debug.Print "      Offset failed both directions"
+
+        swApp.CloseDoc swDraw.GetTitle
+
+        If wasSupp Then
+
+            flatFeat.SetSuppression2 0, 2, Nothing
+
+            swPart.EditRebuild3
+
+        End If
+
+        ExportPartPrecut = False
+
+        Exit Function
+
+    End If
+
+
+
+    Dim outwardOK As Boolean
+
+    outwardOK = OffsetIsOutward(sketch)
+
+    Debug.Print "      Offset outward: " & outwardOK
+
+
+
+    If Not outwardOK Then
+
+        Debug.Print "      Reversing direction..."
+
+        swDoc.EditUndo2 1
+
+        swDoc.ClearSelection2 True
+
+        SelectAllSketchSegmentsInView sketch, swSelData
+
+        On Error Resume Next
+
+        okOffset = swDoc.SketchManager.SketchOffset2(offsetMeters, False, 0, False, True, True, False)
+
+        On Error GoTo 0
+
+        Debug.Print "      Retry reversed ok=" & okOffset
+
+    End If
+
+
+
+    swDoc.SketchManager.InsertSketch True
+
+
+
+    If Not g_precutKeepFeats Then
+
+        Debug.Print "      bbox-only: deleting construction & view"
+
+        DeleteConstructionEntities sketch, swDoc, swSelData
+
+        Dim viewName2 As String
+
+        viewName2 = swView.GetName2
+
+        swDoc.Extension.SelectByID2 viewName2, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0
+
+        swDoc.EditDelete
+
+    End If
+
+
+
+    swDoc.ClearSelection2 True
+
+    swDoc.EditRebuild3
+
+
+
+    Dim sErrs As Long
+
+    Dim sWarns As Long
+
+    ' Save with DXF 1:1 enabled; drawing exports otherwise depend on workstation settings.
+    Dim okSave As Boolean
+
+    okSave = SaveDrawingAsDxf1To1(swDoc, filePath)
+    Debug.Print "      Saved: " & okSave
+
+
+
+    swApp.CloseDoc swDraw.GetTitle
+
+
+
+    If wasSupp Then
+
+        flatFeat.SetSuppression2 0, 2, Nothing
+
+        swPart.EditRebuild3
+
+    End If
+
+
+
+    ExportPartPrecut = okSave
+
+End Function
+
+
+
+' ================================================================
+
+Function ExportPartPrecutSimple(swPart As Object, filePath As String, isSM As Boolean) As Boolean
+
+    Dim okBase As Boolean
+
+    DeleteExistingFile filePath
+
+    If isSM Then
+
+        okBase = ExportSMFlatPattern(swPart, filePath)
+
+    Else
+
+        okBase = ExportProjectedViewFast(swPart, filePath)
+
+        If Not okBase Then
+
+            Debug.Print "      Projected view DXF failed, trying selected-face fallback"
+
+            okBase = ExportBestViewFast(swPart, filePath)
+
+        End If
+
+    End If
+
+    If okBase Then
+
+        If AddOffsetOutlineToDxf(filePath, swPart, g_precutOffset_mm, g_precutKeepFeats) Then
+
+            Debug.Print "      Real offset outline DXF saved; keepInternal=" & g_precutKeepFeats
+
+            ExportPartPrecutSimple = True
+
+            Exit Function
+
+        End If
+
+        Debug.Print "      Base DXF saved, but real outline offset failed"
+
+    Else
+
+        Debug.Print "      Base feature DXF failed"
+
+    End If
+
+    Debug.Print "      Falling back to outline box only"
+
+    ExportPartPrecutSimple = WritePrecutBoxDxf(swPart, filePath, isSM)
+
+End Function
+
+Function ExportThinSolidRegularDxf(swPart As Object, filePath As String) As Boolean
+
+    If ExportProjectedViewFast(swPart, filePath) Then
+
+        If CleanProjectedDxfChamferLoops(filePath) Then
+
+            Debug.Print "      Projected DXF cleaned for chamfer boundary loops"
+
+        Else
+
+            Debug.Print "      Projected DXF saved; chamfer cleanup not needed/failed"
+
+        End If
+
+        ExportThinSolidRegularDxf = True
+
+        Exit Function
+
+    End If
+
+    Debug.Print "      Projected view DXF failed, trying selected-face fallback"
+
+    ExportThinSolidRegularDxf = ExportBestViewFast(swPart, filePath)
+
+End Function
+
+Function CleanProjectedDxfChamferLoops(filePath As String) As Boolean
+
+    Dim fso As Object
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then Exit Function
+
+    Dim ts As Object
+
+    Set ts = fso.OpenTextFile(filePath, 1, False)
+
+    Dim raw As String
+
+    raw = ts.ReadAll
+
+    ts.Close
+
+    raw = Replace(raw, vbCrLf, vbLf)
+
+    raw = Replace(raw, vbCr, vbLf)
+
+    Dim lines As Variant
+
+    lines = Split(raw, vbLf)
+
+    Dim inEnt As Boolean
+
+    Dim maxItems As Long
+
+    maxItems = UBound(lines) \ 2 + 5
+
+    Dim entCount As Long
+
+    Dim entType() As String
+
+    Dim entStart() As Long
+
+    Dim entEnd() As Long
+
+    ReDim entType(1 To maxItems)
+
+    ReDim entStart(1 To maxItems)
+
+    ReDim entEnd(1 To maxItems)
+
+    Dim gCount As Long
+
+    Dim gKind() As String
+
+    Dim gEnt() As Long
+
+    Dim gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double
+
+    ReDim gKind(1 To maxItems)
+
+    ReDim gEnt(1 To maxItems)
+
+    ReDim gx1(1 To maxItems)
+
+    ReDim gy1(1 To maxItems)
+
+    ReDim gx2(1 To maxItems)
+
+    ReDim gy2(1 To maxItems)
+
+    Dim i As Long
+
+    i = 0
+
+    Do While i <= UBound(lines) - 1
+
+        Dim code As String
+
+        Dim val As String
+
+        code = Trim(CStr(lines(i)))
+
+        val = Trim(CStr(lines(i + 1)))
+
+        If code = "2" And UCase(val) = "ENTITIES" Then inEnt = True
+
+        If inEnt And code = "0" Then
+
+            If UCase(val) = "ENDSEC" Then Exit Do
+
+            entCount = entCount + 1
+
+            entType(entCount) = UCase(val)
+
+            entStart(entCount) = i
+
+            Dim j As Long
+
+            j = i + 2
+
+            Dim x10 As Double, y20 As Double, x11 As Double, y21 As Double
+
+            Dim cx As Double, cy As Double, rr As Double, aa1 As Double, aa2 As Double
+
+            Dim has10 As Boolean, has20 As Boolean, has11 As Boolean, has21 As Boolean
+
+            Dim has40 As Boolean, has50 As Boolean, has51 As Boolean
+
+            Dim polyX() As Double, polyY() As Double
+
+            Dim polyN As Long
+
+            Dim polyClosed As Boolean
+
+            Dim pendingPolyX As Boolean
+
+            Dim tmpPolyX As Double
+
+            Do While j <= UBound(lines) - 1
+
+                Dim c As String
+
+                Dim v As String
+
+                c = Trim(CStr(lines(j)))
+
+                v = Trim(CStr(lines(j + 1)))
+
+                If c = "0" Then Exit Do
+
+                If entType(entCount) = "LINE" Then
+
+                    If c = "10" Then x10 = ParseDxfNumber(v): has10 = True
+
+                    If c = "20" Then y20 = ParseDxfNumber(v): has20 = True
+
+                    If c = "11" Then x11 = ParseDxfNumber(v): has11 = True
+
+                    If c = "21" Then y21 = ParseDxfNumber(v): has21 = True
+
+                ElseIf entType(entCount) = "ARC" Then
+
+                    If c = "10" Then cx = ParseDxfNumber(v): has10 = True
+
+                    If c = "20" Then cy = ParseDxfNumber(v): has20 = True
+
+                    If c = "40" Then rr = ParseDxfNumber(v): has40 = True
+
+                    If c = "50" Then aa1 = ParseDxfNumber(v): has50 = True
+
+                    If c = "51" Then aa2 = ParseDxfNumber(v): has51 = True
+
+                ElseIf entType(entCount) = "LWPOLYLINE" Then
+
+                    If c = "70" Then polyClosed = ((CLng(ParseDxfNumber(v)) And 1) <> 0)
+
+                    If c = "10" Then
+
+                        tmpPolyX = ParseDxfNumber(v)
+
+                        pendingPolyX = True
+
+                    End If
+
+                    If c = "20" And pendingPolyX Then
+
+                        polyN = polyN + 1
+
+                        If polyN = 1 Then
+
+                            ReDim polyX(1 To 1)
+
+                            ReDim polyY(1 To 1)
+
+                        Else
+
+                            ReDim Preserve polyX(1 To polyN)
+
+                            ReDim Preserve polyY(1 To polyN)
+
+                        End If
+
+                        polyX(polyN) = tmpPolyX
+
+                        polyY(polyN) = ParseDxfNumber(v)
+
+                        pendingPolyX = False
+
+                    End If
+
+                End If
+
+                j = j + 2
+
+            Loop
+
+            entEnd(entCount) = j - 1
+
+            If entType(entCount) = "LINE" And has10 And has20 And has11 And has21 Then
+
+                gCount = gCount + 1
+
+                gKind(gCount) = "LINE"
+
+                gEnt(gCount) = entCount
+
+                gx1(gCount) = x10
+
+                gy1(gCount) = y20
+
+                gx2(gCount) = x11
+
+                gy2(gCount) = y21
+
+            ElseIf entType(entCount) = "ARC" And has10 And has20 And has40 And has50 And has51 Then
+
+                gCount = gCount + 1
+
+                gKind(gCount) = "ARC"
+
+                gEnt(gCount) = entCount
+
+                gx1(gCount) = ArcPointX(cx, rr, aa1)
+
+                gy1(gCount) = ArcPointY(cy, rr, aa1)
+
+                gx2(gCount) = ArcPointX(cx, rr, aa2)
+
+                gy2(gCount) = ArcPointY(cy, rr, aa2)
+
+            ElseIf entType(entCount) = "LWPOLYLINE" And polyN >= 2 Then
+
+                Dim p As Long
+
+                For p = 1 To polyN - 1
+
+                    gCount = gCount + 1
+
+                    gKind(gCount) = "LINE"
+
+                    gEnt(gCount) = entCount
+
+                    gx1(gCount) = polyX(p)
+
+                    gy1(gCount) = polyY(p)
+
+                    gx2(gCount) = polyX(p + 1)
+
+                    gy2(gCount) = polyY(p + 1)
+
+                Next p
+
+                If polyClosed Then
+
+                    gCount = gCount + 1
+
+                    gKind(gCount) = "LINE"
+
+                    gEnt(gCount) = entCount
+
+                    gx1(gCount) = polyX(polyN)
+
+                    gy1(gCount) = polyY(polyN)
+
+                    gx2(gCount) = polyX(1)
+
+                    gy2(gCount) = polyY(1)
+
+                End If
+
+            End If
+
+            i = j
+
+        Else
+
+            i = i + 2
+
+        End If
+
+    Loop
+
+    If gCount = 0 Then Exit Function
+
+    Dim bestComp As Long
+
+    bestComp = FindOuterGeometryComponent(gCount, gx1, gy1, gx2, gy2)
+
+    If bestComp = 0 Then Exit Function
+
+    MarkOuterDropComponents gCount, gx1, gy1, gx2, gy2, bestComp, False
+
+    Dim out As String
+
+    out = ""
+
+    For i = 0 To UBound(lines)
+
+        If Not ShouldDropDxfLine(i, True, entCount, entType, entStart, entEnd, gCount, gEnt, bestComp, gx1, gy1, gx2, gy2) Then
+
+            If i < UBound(lines) Or Len(CStr(lines(i))) > 0 Then out = out & CStr(lines(i)) & vbCrLf
+
+        End If
+
+    Next i
+
+    Set ts = fso.OpenTextFile(filePath, 2, True)
+
+    ts.Write out
+
+    ts.Close
+
+    CleanProjectedDxfChamferLoops = True
+
+End Function
+
+Function AddOffsetOutlineToDxf(filePath As String, swPart As Object, offsetMm As Double, keepInternal As Boolean) As Boolean
+
+    Dim fso As Object
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then Exit Function
+
+    Dim ts As Object
+
+    Set ts = fso.OpenTextFile(filePath, 1, False)
+
+    Dim raw As String
+
+    raw = ts.ReadAll
+
+    ts.Close
+
+    raw = Replace(raw, vbCrLf, vbLf)
+
+    raw = Replace(raw, vbCr, vbLf)
+
+    Dim lines As Variant
+
+    lines = Split(raw, vbLf)
+
+    Dim inEnt As Boolean
+
+    Dim insertIdx As Long
+
+    insertIdx = -1
+
+    Dim maxItems As Long
+
+    maxItems = UBound(lines) \ 2 + 5
+
+    Dim entCount As Long
+
+    Dim entType() As String
+
+    Dim entStart() As Long
+
+    Dim entEnd() As Long
+
+    ReDim entType(1 To maxItems)
+
+    ReDim entStart(1 To maxItems)
+
+    ReDim entEnd(1 To maxItems)
+
+    Dim gCount As Long
+
+    Dim gKind() As String
+
+    Dim gEnt() As Long
+
+    Dim gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double
+
+    Dim gcx() As Double, gcy() As Double, gr() As Double, ga1() As Double, ga2() As Double
+
+    ReDim gKind(1 To maxItems)
+
+    ReDim gEnt(1 To maxItems)
+
+    ReDim gx1(1 To maxItems)
+
+    ReDim gy1(1 To maxItems)
+
+    ReDim gx2(1 To maxItems)
+
+    ReDim gy2(1 To maxItems)
+
+    ReDim gcx(1 To maxItems)
+
+    ReDim gcy(1 To maxItems)
+
+    ReDim gr(1 To maxItems)
+
+    ReDim ga1(1 To maxItems)
+
+    ReDim ga2(1 To maxItems)
+
+    Dim i As Long
+
+    i = 0
+
+    Do While i <= UBound(lines) - 1
+
+        Dim code As String
+
+        Dim val As String
+
+        code = Trim(CStr(lines(i)))
+
+        val = Trim(CStr(lines(i + 1)))
+
+        If code = "2" And UCase(val) = "ENTITIES" Then inEnt = True
+
+        If inEnt And code = "0" Then
+
+            If UCase(val) = "ENDSEC" Then
+
+                insertIdx = i
+
+                Exit Do
+
+            End If
+
+            entCount = entCount + 1
+
+            entType(entCount) = UCase(val)
+
+            entStart(entCount) = i
+
+            Dim j As Long
+
+            j = i + 2
+
+            Dim x10 As Double, y20 As Double, x11 As Double, y21 As Double
+
+            Dim cx As Double, cy As Double, rr As Double, aa1 As Double, aa2 As Double
+
+            Dim has10 As Boolean, has20 As Boolean, has11 As Boolean, has21 As Boolean
+
+            Dim has40 As Boolean, has50 As Boolean, has51 As Boolean
+
+            Dim polyX() As Double, polyY() As Double
+
+            Dim polyN As Long
+
+            Dim polyClosed As Boolean
+
+            Dim pendingPolyX As Boolean
+
+            Dim tmpPolyX As Double
+
+            Do While j <= UBound(lines) - 1
+
+                Dim c As String
+
+                Dim v As String
+
+                c = Trim(CStr(lines(j)))
+
+                v = Trim(CStr(lines(j + 1)))
+
+                If c = "0" Then Exit Do
+
+                If entType(entCount) = "LINE" Then
+
+                    If c = "10" Then x10 = ParseDxfNumber(v): has10 = True
+
+                    If c = "20" Then y20 = ParseDxfNumber(v): has20 = True
+
+                    If c = "11" Then x11 = ParseDxfNumber(v): has11 = True
+
+                    If c = "21" Then y21 = ParseDxfNumber(v): has21 = True
+
+                ElseIf entType(entCount) = "ARC" Then
+
+                    If c = "10" Then cx = ParseDxfNumber(v): has10 = True
+
+                    If c = "20" Then cy = ParseDxfNumber(v): has20 = True
+
+                    If c = "40" Then rr = ParseDxfNumber(v): has40 = True
+
+                    If c = "50" Then aa1 = ParseDxfNumber(v): has50 = True
+
+                    If c = "51" Then aa2 = ParseDxfNumber(v): has51 = True
+
+                ElseIf entType(entCount) = "LWPOLYLINE" Then
+
+                    If c = "70" Then polyClosed = ((CLng(ParseDxfNumber(v)) And 1) <> 0)
+
+                    If c = "10" Then
+
+                        tmpPolyX = ParseDxfNumber(v)
+
+                        pendingPolyX = True
+
+                    End If
+
+                    If c = "20" And pendingPolyX Then
+
+                        polyN = polyN + 1
+
+                        If polyN = 1 Then
+
+                            ReDim polyX(1 To 1)
+
+                            ReDim polyY(1 To 1)
+
+                        Else
+
+                            ReDim Preserve polyX(1 To polyN)
+
+                            ReDim Preserve polyY(1 To polyN)
+
+                        End If
+
+                        polyX(polyN) = tmpPolyX
+
+                        polyY(polyN) = ParseDxfNumber(v)
+
+                        pendingPolyX = False
+
+                    End If
+
+                End If
+
+                j = j + 2
+
+            Loop
+
+            entEnd(entCount) = j - 1
+
+            If entType(entCount) = "LINE" And has10 And has20 And has11 And has21 Then
+
+                gCount = gCount + 1
+
+                gKind(gCount) = "LINE"
+
+                gEnt(gCount) = entCount
+
+                gx1(gCount) = x10
+
+                gy1(gCount) = y20
+
+                gx2(gCount) = x11
+
+                gy2(gCount) = y21
+
+            ElseIf entType(entCount) = "ARC" And has10 And has20 And has40 And has50 And has51 Then
+
+                gCount = gCount + 1
+
+                gKind(gCount) = "ARC"
+
+                gEnt(gCount) = entCount
+
+                gcx(gCount) = cx
+
+                gcy(gCount) = cy
+
+                gr(gCount) = rr
+
+                ga1(gCount) = aa1
+
+                ga2(gCount) = aa2
+
+                gx1(gCount) = ArcPointX(cx, rr, aa1)
+
+                gy1(gCount) = ArcPointY(cy, rr, aa1)
+
+                gx2(gCount) = ArcPointX(cx, rr, aa2)
+
+                gy2(gCount) = ArcPointY(cy, rr, aa2)
+
+            ElseIf entType(entCount) = "LWPOLYLINE" And polyN >= 2 Then
+
+                Dim p As Long
+
+                For p = 1 To polyN - 1
+
+                    gCount = gCount + 1
+
+                    gKind(gCount) = "LINE"
+
+                    gEnt(gCount) = entCount
+
+                    gx1(gCount) = polyX(p)
+
+                    gy1(gCount) = polyY(p)
+
+                    gx2(gCount) = polyX(p + 1)
+
+                    gy2(gCount) = polyY(p + 1)
+
+                Next p
+
+                If polyClosed Then
+
+                    gCount = gCount + 1
+
+                    gKind(gCount) = "LINE"
+
+                    gEnt(gCount) = entCount
+
+                    gx1(gCount) = polyX(polyN)
+
+                    gy1(gCount) = polyY(polyN)
+
+                    gx2(gCount) = polyX(1)
+
+                    gy2(gCount) = polyY(1)
+
+                End If
+
+            End If
+
+            i = j
+
+        Else
+
+            i = i + 2
+
+        End If
+
+    Loop
+
+    If insertIdx < 0 Then
+
+        Debug.Print "      DXF outline insert failed: no ENTITIES end"
+
+        Exit Function
+
+    End If
+
+    If gCount = 0 Then
+
+        Debug.Print "      DXF outline insert failed: no line/arc entities"
+
+        Exit Function
+
+    End If
+
+    Dim bestComp As Long
+
+    bestComp = FindOuterGeometryComponent(gCount, gx1, gy1, gx2, gy2)
+
+    If bestComp = 0 Then
+
+        Debug.Print "      DXF outline insert failed: no outer component"
+
+        Exit Function
+
+    End If
+
+    MarkOuterDropComponents gCount, gx1, gy1, gx2, gy2, bestComp, True
+
+    Dim t As Double
+
+    Dim w As Double
+
+    Dim longDim As Double
+
+    Dim unitScale As Double
+
+    unitScale = 1#
+
+    Dim px() As Double
+
+    Dim py() As Double
+
+    Dim pCount As Long
+
+    If Not BuildComponentPointLoop(bestComp, gCount, gKind, gx1, gy1, gx2, gy2, gcx, gcy, gr, ga1, ga2, px, py, pCount) Then
+
+        Debug.Print "      DXF outline insert failed: could not order outer loop"
+
+        Exit Function
+
+    End If
+
+    Dim outX() As Double
+
+    Dim outY() As Double
+
+    Dim outCount As Long
+
+    If GetSortedBoxDimsMM(swPart, t, w, longDim) Then
+
+        Dim dxfLong As Double
+
+        dxfLong = DxfPointSpan(px, py, pCount)
+
+        If longDim > 0 And dxfLong > 0 Then unitScale = dxfLong / longDim
+
+    End If
+
+    If Not OffsetPointLoop(px, py, pCount, offsetMm * unitScale, outX, outY, outCount) Then
+
+        Debug.Print "      DXF outline insert failed: offset failed"
+
+        Exit Function
+
+    End If
+
+    Dim newOutline As String
+
+    newOutline = BuildDxfPolyline(outX, outY, outCount, "PRECUT_OUTLINE")
+
+    Dim out As String
+
+    out = ""
+
+    For i = 0 To UBound(lines)
+
+        If i = insertIdx Then out = out & newOutline
+
+        If Not ShouldDropDxfLine(i, keepInternal, entCount, entType, entStart, entEnd, gCount, gEnt, bestComp, gx1, gy1, gx2, gy2) Then
+
+            If i < UBound(lines) Or Len(CStr(lines(i))) > 0 Then out = out & CStr(lines(i)) & vbCrLf
+
+        End If
+
+    Next i
+
+    Set ts = fso.OpenTextFile(filePath, 2, True)
+
+    ts.Write out
+
+    ts.Close
+
+    AddOffsetOutlineToDxf = True
+
+    Debug.Print "      Real offset outline inserted; DXF unit scale=" & Round(unitScale, 6) & " keepInternal=" & keepInternal
+
+End Function
+
+Function FindOuterGeometryComponent(gCount As Long, gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double) As Long
+
+    Dim comp() As Long
+
+    ReDim comp(1 To gCount)
+
+    Dim compCount As Long
+
+    Dim i As Long
+
+    For i = 1 To gCount
+
+        If comp(i) = 0 Then
+
+            compCount = compCount + 1
+
+            comp(i) = compCount
+
+            Dim changed As Boolean
+
+            changed = True
+
+            Do While changed
+
+                changed = False
+
+                Dim a As Long
+
+                Dim b As Long
+
+                For a = 1 To gCount
+
+                    If comp(a) = compCount Then
+
+                        For b = 1 To gCount
+
+                            If comp(b) = 0 Then
+
+                                If GeoConnected(a, b, gx1, gy1, gx2, gy2) Then
+
+                                    comp(b) = compCount
+
+                                    changed = True
+
+                                End If
+
+                            End If
+
+                        Next b
+
+                    End If
+
+                Next a
+
+            Loop
+
+        End If
+
+    Next i
+
+    Dim bestScore As Double
+
+    bestScore = -1#
+
+    Dim c As Long
+
+    For c = 1 To compCount
+
+        Dim minX As Double, minY As Double, maxX As Double, maxY As Double
+
+        minX = 1E+30
+
+        minY = 1E+30
+
+        maxX = -1E+30
+
+        maxY = -1E+30
+
+        For i = 1 To gCount
+
+            If comp(i) = c Then
+
+                ExpandBounds minX, minY, maxX, maxY, gx1(i), gy1(i)
+
+                ExpandBounds minX, minY, maxX, maxY, gx2(i), gy2(i)
+
+            End If
+
+        Next i
+
+        Dim score As Double
+
+        score = (maxX - minX) * (maxY - minY)
+
+        If score > bestScore Then
+
+            bestScore = score
+
+            FindOuterGeometryComponent = c
+
+        End If
+
+    Next c
+
+    StoreTempComponents comp
+
+End Function
+
+Sub StoreTempComponents(comp() As Long)
+
+    Dim i As Long
+
+    ReDim g_dxfComp(LBound(comp) To UBound(comp))
+
+    For i = LBound(comp) To UBound(comp)
+
+        g_dxfComp(i) = comp(i)
+
+    Next i
+
+End Sub
+
+Sub MarkOuterDropComponents(gCount As Long, gx1() As Double, gy1() As Double, _
+                            gx2() As Double, gy2() As Double, _
+                            bestComp As Long, dropBest As Boolean)
+
+    Dim compMax As Long
+
+    Dim i As Long
+
+    For i = 1 To gCount
+
+        If g_dxfComp(i) > compMax Then compMax = g_dxfComp(i)
+
+    Next i
+
+    If compMax <= 0 Then Exit Sub
+
+    ReDim g_dxfDropComp(1 To compMax)
+
+    g_dxfDropComp(bestComp) = dropBest
+
+    Dim bestMinX As Double, bestMinY As Double, bestMaxX As Double, bestMaxY As Double
+
+    bestMinX = 1E+30
+
+    bestMinY = 1E+30
+
+    bestMaxX = -1E+30
+
+    bestMaxY = -1E+30
+
+    For i = 1 To gCount
+
+        If g_dxfComp(i) = bestComp Then
+
+            ExpandBounds bestMinX, bestMinY, bestMaxX, bestMaxY, gx1(i), gy1(i)
+
+            ExpandBounds bestMinX, bestMinY, bestMaxX, bestMaxY, gx2(i), gy2(i)
+
+        End If
+
+    Next i
+
+    Dim bestW As Double
+
+    Dim bestH As Double
+
+    bestW = bestMaxX - bestMinX
+
+    bestH = bestMaxY - bestMinY
+
+    If bestW <= 0# Or bestH <= 0# Then Exit Sub
+
+    Dim compId As Long
+
+    For compId = 1 To compMax
+
+        If compId <> bestComp Then
+
+            Dim minX As Double, minY As Double, maxX As Double, maxY As Double
+
+            minX = 1E+30
+
+            minY = 1E+30
+
+            maxX = -1E+30
+
+            maxY = -1E+30
+
+            For i = 1 To gCount
+
+                If g_dxfComp(i) = compId Then
+
+                    ExpandBounds minX, minY, maxX, maxY, gx1(i), gy1(i)
+
+                    ExpandBounds minX, minY, maxX, maxY, gx2(i), gy2(i)
+
+                End If
+
+            Next i
+
+            Dim compW As Double
+
+            Dim compH As Double
+
+            compW = maxX - minX
+
+            compH = maxY - minY
+
+            If compW >= bestW * 0.6 And compH >= bestH * 0.6 Then
+
+                If Abs(minX - bestMinX) <= bestW * 0.18 And _
+                   Abs(maxX - bestMaxX) <= bestW * 0.18 And _
+                   Abs(minY - bestMinY) <= bestH * 0.18 And _
+                   Abs(maxY - bestMaxY) <= bestH * 0.18 Then
+
+                    g_dxfDropComp(compId) = True
+
+                End If
+
+            End If
+
+            If Not g_dxfDropComp(compId) Then
+
+                Dim closedComp As Boolean
+
+                closedComp = DxfComponentIsClosed(compId, gCount, gx1, gy1, gx2, gy2)
+
+                Dim edgeTolX As Double
+
+                Dim edgeTolY As Double
+
+                edgeTolX = bestW * 0.08
+
+                edgeTolY = bestH * 0.08
+
+                Dim nearLeftEdge As Boolean
+
+                Dim nearRightEdge As Boolean
+
+                Dim nearBottomEdge As Boolean
+
+                Dim nearTopEdge As Boolean
+
+                nearLeftEdge = (Abs(minX - bestMinX) <= edgeTolX And Abs(maxX - bestMinX) <= edgeTolX)
+
+                nearRightEdge = (Abs(minX - bestMaxX) <= edgeTolX And Abs(maxX - bestMaxX) <= edgeTolX)
+
+                nearBottomEdge = (Abs(minY - bestMinY) <= edgeTolY And Abs(maxY - bestMinY) <= edgeTolY)
+
+                nearTopEdge = (Abs(minY - bestMaxY) <= edgeTolY And Abs(maxY - bestMaxY) <= edgeTolY)
+
+                If Not closedComp And compH >= bestH * 0.45 And (nearLeftEdge Or nearRightEdge) Then
+
+                    g_dxfDropComp(compId) = True
+
+                End If
+
+                If Not closedComp And compW >= bestW * 0.45 And (nearBottomEdge Or nearTopEdge) Then
+
+                    g_dxfDropComp(compId) = True
+
+                End If
+
+                Dim closeBounds As Long
+
+                If Abs(minX - bestMinX) <= edgeTolX Then closeBounds = closeBounds + 1
+
+                If Abs(maxX - bestMaxX) <= edgeTolX Then closeBounds = closeBounds + 1
+
+                If Abs(minY - bestMinY) <= edgeTolY Then closeBounds = closeBounds + 1
+
+                If Abs(maxY - bestMaxY) <= edgeTolY Then closeBounds = closeBounds + 1
+
+                If Not closedComp And compW >= bestW * 0.45 And compH >= bestH * 0.45 And closeBounds >= 2 Then
+
+                    g_dxfDropComp(compId) = True
+
+                End If
+
+            End If
+
+        End If
+
+    Next compId
+
+End Sub
+
+Function DxfComponentMarkedDrop(compId As Long) As Boolean
+
+    On Error Resume Next
+
+    DxfComponentMarkedDrop = g_dxfDropComp(compId)
+
+    On Error GoTo 0
+
+End Function
+
+Function DxfComponentIsClosed(compId As Long, gCount As Long, _
+                              gx1() As Double, gy1() As Double, _
+                              gx2() As Double, gy2() As Double) As Boolean
+
+    Dim hasGeometry As Boolean
+
+    Dim i As Long
+
+    For i = 1 To gCount
+
+        If g_dxfComp(i) = compId Then
+
+            hasGeometry = True
+
+            If DxfEndpointDegree(compId, gx1(i), gy1(i), gCount, gx1, gy1, gx2, gy2) < 2 Then Exit Function
+
+            If DxfEndpointDegree(compId, gx2(i), gy2(i), gCount, gx1, gy1, gx2, gy2) < 2 Then Exit Function
+
+        End If
+
+    Next i
+
+    DxfComponentIsClosed = hasGeometry
+
+End Function
+
+Function DxfEndpointDegree(compId As Long, x As Double, y As Double, gCount As Long, _
+                           gx1() As Double, gy1() As Double, _
+                           gx2() As Double, gy2() As Double) As Long
+
+    Dim i As Long
+
+    For i = 1 To gCount
+
+        If g_dxfComp(i) = compId Then
+
+            If PointsNear(x, y, gx1(i), gy1(i)) Then DxfEndpointDegree = DxfEndpointDegree + 1
+
+            If PointsNear(x, y, gx2(i), gy2(i)) Then DxfEndpointDegree = DxfEndpointDegree + 1
+
+        End If
+
+    Next i
+
+End Function
+
+Function GeoConnected(a As Long, b As Long, gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double) As Boolean
+
+    GeoConnected = PointsNear(gx1(a), gy1(a), gx1(b), gy1(b)) Or _
+                   PointsNear(gx1(a), gy1(a), gx2(b), gy2(b)) Or _
+                   PointsNear(gx2(a), gy2(a), gx1(b), gy1(b)) Or _
+                   PointsNear(gx2(a), gy2(a), gx2(b), gy2(b))
+
+End Function
+
+Function PointsNear(x1 As Double, y1 As Double, x2 As Double, y2 As Double) As Boolean
+
+    PointsNear = (Abs(x1 - x2) < 0.001 And Abs(y1 - y2) < 0.001)
+
+End Function
+
+Sub ExpandBounds(ByRef minX As Double, ByRef minY As Double, ByRef maxX As Double, ByRef maxY As Double, x As Double, y As Double)
+
+    If x < minX Then minX = x
+
+    If y < minY Then minY = y
+
+    If x > maxX Then maxX = x
+
+    If y > maxY Then maxY = y
+
+End Sub
+
+Function BuildComponentPointLoop(bestComp As Long, gCount As Long, gKind() As String, _
+                                 gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double, _
+                                 gcx() As Double, gcy() As Double, gr() As Double, _
+                                 ga1() As Double, ga2() As Double, _
+                                 ByRef px() As Double, ByRef py() As Double, ByRef pCount As Long) As Boolean
+
+    Dim used() As Boolean
+
+    ReDim used(1 To gCount)
+
+    Dim first As Long
+
+    Dim i As Long
+
+    For i = 1 To gCount
+
+        If g_dxfComp(i) = bestComp Then
+
+            first = i
+
+            Exit For
+
+        End If
+
+    Next i
+
+    If first = 0 Then Exit Function
+
+    AppendGeoPoints first, False, gKind, gx1, gy1, gx2, gy2, gcx, gcy, gr, ga1, ga2, px, py, pCount
+
+    used(first) = True
+
+    Dim curX As Double
+
+    Dim curY As Double
+
+    curX = gx2(first)
+
+    curY = gy2(first)
+
+    Dim added As Boolean
+
+    Do
+
+        added = False
+
+        For i = 1 To gCount
+
+            If g_dxfComp(i) = bestComp And Not used(i) Then
+
+                If PointsNear(curX, curY, gx1(i), gy1(i)) Then
+
+                    AppendGeoPoints i, False, gKind, gx1, gy1, gx2, gy2, gcx, gcy, gr, ga1, ga2, px, py, pCount
+
+                    curX = gx2(i)
+
+                    curY = gy2(i)
+
+                    used(i) = True
+
+                    added = True
+
+                    Exit For
+
+                ElseIf PointsNear(curX, curY, gx2(i), gy2(i)) Then
+
+                    AppendGeoPoints i, True, gKind, gx1, gy1, gx2, gy2, gcx, gcy, gr, ga1, ga2, px, py, pCount
+
+                    curX = gx1(i)
+
+                    curY = gy1(i)
+
+                    used(i) = True
+
+                    added = True
+
+                    Exit For
+
+                End If
+
+            End If
+
+        Next i
+
+    Loop While added
+
+    BuildComponentPointLoop = (pCount >= 3)
+
+End Function
+
+Sub AppendGeoPoints(idx As Long, reversed As Boolean, gKind() As String, _
+                    gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double, _
+                    gcx() As Double, gcy() As Double, gr() As Double, _
+                    ga1() As Double, ga2() As Double, _
+                    ByRef px() As Double, ByRef py() As Double, ByRef pCount As Long)
+
+    If gKind(idx) = "LINE" Then
+
+        If reversed Then
+
+            AddDxfPoint px, py, pCount, gx2(idx), gy2(idx)
+
+            AddDxfPoint px, py, pCount, gx1(idx), gy1(idx)
+
+        Else
+
+            AddDxfPoint px, py, pCount, gx1(idx), gy1(idx)
+
+            AddDxfPoint px, py, pCount, gx2(idx), gy2(idx)
+
+        End If
+
+    ElseIf gKind(idx) = "ARC" Then
+
+        Dim aStart As Double
+
+        Dim aEnd As Double
+
+        Dim sweep As Double
+
+        If reversed Then
+
+            aStart = ga2(idx)
+
+            aEnd = ga1(idx)
+
+            If aEnd > aStart Then aEnd = aEnd - 360#
+
+            sweep = aStart - aEnd
+
+        Else
+
+            aStart = ga1(idx)
+
+            aEnd = ga2(idx)
+
+            If aEnd < aStart Then aEnd = aEnd + 360#
+
+            sweep = aEnd - aStart
+
+        End If
+
+        Dim steps As Long
+
+        steps = Int(Abs(sweep) / 5#) + 1
+
+        If steps < 4 Then steps = 4
+
+        Dim k As Long
+
+        For k = 0 To steps
+
+            Dim a As Double
+
+            If reversed Then
+
+                a = aStart - sweep * k / steps
+
+            Else
+
+                a = aStart + sweep * k / steps
+
+            End If
+
+            AddDxfPoint px, py, pCount, ArcPointX(gcx(idx), gr(idx), a), ArcPointY(gcy(idx), gr(idx), a)
+
+        Next k
+
+    End If
+
+End Sub
+
+Sub AddDxfPoint(ByRef px() As Double, ByRef py() As Double, ByRef pCount As Long, x As Double, y As Double)
+
+    If pCount > 0 Then
+
+        If PointsNear(px(pCount), py(pCount), x, y) Then Exit Sub
+
+    End If
+
+    pCount = pCount + 1
+
+    If pCount = 1 Then
+
+        ReDim px(1 To pCount)
+
+        ReDim py(1 To pCount)
+
+    Else
+
+        ReDim Preserve px(1 To pCount)
+
+        ReDim Preserve py(1 To pCount)
+
+    End If
+
+    px(pCount) = x
+
+    py(pCount) = y
+
+End Sub
+
+Function OffsetPointLoop(px() As Double, py() As Double, pCount As Long, dist As Double, ByRef ox() As Double, ByRef oy() As Double, ByRef oCount As Long) As Boolean
+
+    Dim n As Long
+
+    n = pCount
+
+    If n > 2 Then
+
+        If PointsNear(px(1), py(1), px(n), py(n)) Then n = n - 1
+
+    End If
+
+    If n < 3 Then Exit Function
+
+    Dim area As Double
+
+    area = PolygonArea(px, py, n)
+
+    Dim nx() As Double
+
+    Dim ny() As Double
+
+    ReDim nx(1 To n)
+
+    ReDim ny(1 To n)
+
+    Dim i As Long
+
+    For i = 1 To n
+
+        Dim j As Long
+
+        j = i + 1
+
+        If j > n Then j = 1
+
+        Dim dx As Double
+
+        Dim dy As Double
+
+        dx = px(j) - px(i)
+
+        dy = py(j) - py(i)
+
+        Dim segLen As Double
+
+        segLen = Sqr(dx * dx + dy * dy)
+
+        If segLen <= 0.000001 Then Exit Function
+
+        If area > 0 Then
+
+            nx(i) = dy / segLen
+
+            ny(i) = -dx / segLen
+
+        Else
+
+            nx(i) = -dy / segLen
+
+            ny(i) = dx / segLen
+
+        End If
+
+    Next i
+
+    oCount = n
+
+    ReDim ox(1 To n)
+
+    ReDim oy(1 To n)
+
+    For i = 1 To n
+
+        Dim prev As Long
+
+        prev = i - 1
+
+        If prev < 1 Then prev = n
+
+        Dim nextI As Long
+
+        nextI = i + 1
+
+        If nextI > n Then nextI = 1
+
+        If Not IntersectOffsetLines(px(prev), py(prev), px(i), py(i), nx(prev) * dist, ny(prev) * dist, px(i), py(i), px(nextI), py(nextI), nx(i) * dist, ny(i) * dist, ox(i), oy(i)) Then
+
+            ox(i) = px(i) + (nx(prev) + nx(i)) * dist / 2#
+
+            oy(i) = py(i) + (ny(prev) + ny(i)) * dist / 2#
+
+        End If
+
+    Next i
+
+    OffsetPointLoop = True
+
+End Function
+
+Function IntersectOffsetLines(x1 As Double, y1 As Double, x2 As Double, y2 As Double, _
+                              ox1 As Double, oy1 As Double, _
+                              x3 As Double, y3 As Double, x4 As Double, y4 As Double, _
+                              ox2 As Double, oy2 As Double, _
+                              ByRef ix As Double, ByRef iy As Double) As Boolean
+
+    Dim ax As Double, ay As Double, bx As Double, by As Double
+
+    ax = x1 + ox1
+
+    ay = y1 + oy1
+
+    bx = x2 + ox1
+
+    by = y2 + oy1
+
+    Dim cx As Double, cy As Double, dx As Double, dy As Double
+
+    cx = x3 + ox2
+
+    cy = y3 + oy2
+
+    dx = x4 + ox2
+
+    dy = y4 + oy2
+
+    Dim vx1 As Double, vy1 As Double, vx2 As Double, vy2 As Double
+
+    vx1 = bx - ax
+
+    vy1 = by - ay
+
+    vx2 = dx - cx
+
+    vy2 = dy - cy
+
+    Dim den As Double
+
+    den = vx1 * vy2 - vy1 * vx2
+
+    If Abs(den) < 0.000000001 Then Exit Function
+
+    Dim t As Double
+
+    t = ((cx - ax) * vy2 - (cy - ay) * vx2) / den
+
+    ix = ax + t * vx1
+
+    iy = ay + t * vy1
+
+    IntersectOffsetLines = True
+
+End Function
+
+Function PolygonArea(px() As Double, py() As Double, n As Long) As Double
+
+    Dim a As Double
+
+    Dim i As Long
+
+    For i = 1 To n
+
+        Dim j As Long
+
+        j = i + 1
+
+        If j > n Then j = 1
+
+        a = a + px(i) * py(j) - px(j) * py(i)
+
+    Next i
+
+    PolygonArea = a / 2#
+
+End Function
+
+Function DxfPointSpan(px() As Double, py() As Double, pCount As Long) As Double
+
+    Dim minX As Double, minY As Double, maxX As Double, maxY As Double
+
+    minX = 1E+30
+
+    minY = 1E+30
+
+    maxX = -1E+30
+
+    maxY = -1E+30
+
+    Dim i As Long
+
+    For i = 1 To pCount
+
+        ExpandBounds minX, minY, maxX, maxY, px(i), py(i)
+
+    Next i
+
+    DxfPointSpan = Abs(maxX - minX)
+
+    If Abs(maxY - minY) > DxfPointSpan Then DxfPointSpan = Abs(maxY - minY)
+
+End Function
+
+Function BuildDxfPolyline(px() As Double, py() As Double, pCount As Long, layerName As String) As String
+
+    Dim s As String
+
+    s = "0" & vbCrLf
+    s = s & "LWPOLYLINE" & vbCrLf
+    s = s & "8" & vbCrLf
+    s = s & layerName & vbCrLf
+    s = s & "90" & vbCrLf
+    s = s & CStr(pCount) & vbCrLf
+    s = s & "70" & vbCrLf
+    s = s & "1" & vbCrLf
+
+    Dim i As Long
+
+    For i = 1 To pCount
+
+        s = s & "10" & vbCrLf
+        s = s & DxfNumber(px(i)) & vbCrLf
+        s = s & "20" & vbCrLf
+        s = s & DxfNumber(py(i)) & vbCrLf
+
+    Next i
+
+    BuildDxfPolyline = s
+
+End Function
+
+Function ShouldDropDxfLine(lineIdx As Long, keepInternal As Boolean, entCount As Long, _
+                           entType() As String, entStart() As Long, entEnd() As Long, _
+                           gCount As Long, gEnt() As Long, bestComp As Long, _
+                           gx1() As Double, gy1() As Double, gx2() As Double, gy2() As Double) As Boolean
+
+    Dim e As Long
+
+    For e = 1 To entCount
+
+        If lineIdx >= entStart(e) And lineIdx <= entEnd(e) Then
+
+            If UCase(entType(e)) = "INSERT" Or UCase(entType(e)) = "MTEXT" Or UCase(entType(e)) = "TEXT" Then
+
+                ShouldDropDxfLine = True
+
+                Exit Function
+
+            End If
+
+            If Not keepInternal Then
+
+                ShouldDropDxfLine = True
+
+                Exit Function
+
+            End If
+
+            Dim g As Long
+
+            For g = 1 To gCount
+
+                If gEnt(g) = e And DxfComponentMarkedDrop(g_dxfComp(g)) Then
+
+                    ShouldDropDxfLine = True
+
+                    Exit Function
+
+                End If
+
+            Next g
+
+            Exit Function
+
+        End If
+
+    Next e
+
+End Function
+
+Function ArcPointX(cx As Double, r As Double, deg As Double) As Double
+
+    ArcPointX = cx + r * Cos(deg * Atn(1#) / 45#)
+
+End Function
+
+Function ArcPointY(cy As Double, r As Double, deg As Double) As Double
+
+    ArcPointY = cy + r * Sin(deg * Atn(1#) / 45#)
+
+End Function
+
+Function BuildDxfRect(x1 As Double, y1 As Double, x2 As Double, y2 As Double) As String
+
+    Dim s As String
+
+    s = "0" & vbCrLf
+    s = s & "LWPOLYLINE" & vbCrLf
+    s = s & "8" & vbCrLf
+    s = s & "PRECUT_OUTLINE" & vbCrLf
+    s = s & "90" & vbCrLf
+    s = s & "4" & vbCrLf
+    s = s & "70" & vbCrLf
+    s = s & "1" & vbCrLf
+    s = s & "10" & vbCrLf
+    s = s & DxfNumber(x1) & vbCrLf
+    s = s & "20" & vbCrLf
+    s = s & DxfNumber(y1) & vbCrLf
+    s = s & "10" & vbCrLf
+    s = s & DxfNumber(x2) & vbCrLf
+    s = s & "20" & vbCrLf
+    s = s & DxfNumber(y1) & vbCrLf
+    s = s & "10" & vbCrLf
+    s = s & DxfNumber(x2) & vbCrLf
+    s = s & "20" & vbCrLf
+    s = s & DxfNumber(y2) & vbCrLf
+    s = s & "10" & vbCrLf
+    s = s & DxfNumber(x1) & vbCrLf
+    s = s & "20" & vbCrLf
+    s = s & DxfNumber(y2) & vbCrLf
+
+    BuildDxfRect = s
+
+End Function
+
+Function ParseDxfNumber(value As String) As Double
+
+    Dim decSep As String
+
+    decSep = Mid(CStr(1.1), 2, 1)
+
+    ParseDxfNumber = CDbl(Replace(value, ".", decSep))
+
+End Function
+
+Function ExportPartPrecutDrawingOld(swPart As Object, filePath As String, isSM As Boolean) As Boolean
+
+    If g_precutKeepFeats Then
+
+        If ExportPrecutDrawingWithBox(swPart, filePath, isSM) Then
+
+            ExportPartPrecutDrawingOld = True
+
+            Exit Function
+
+        End If
+
+        Debug.Print "      Drawing precut failed, falling back to outline box only"
+
+    End If
+
+    ExportPartPrecutDrawingOld = WritePrecutBoxDxf(swPart, filePath, isSM)
+
+End Function
+
+Function ExportPrecutDrawingWithBox(swPart As Object, filePath As String, isSM As Boolean) As Boolean
+
+    Dim flatFeat As Object
+
+    Dim wasSupp As Boolean
+
+    wasSupp = False
+
+    If isSM Then
+
+        Set flatFeat = FindFlatPatternFeat(swPart)
+
+        If Not flatFeat Is Nothing Then
+
+            wasSupp = flatFeat.IsSuppressed
+
+            If wasSupp Then
+
+                flatFeat.SetSuppression2 2, 2, Nothing
+
+                swPart.EditRebuild3
+
+            End If
+
+        End If
+
+    End If
+
+    Dim swDraw As Object
+
+    Set swDraw = swApp.NewDocument(GetDrawingTemplatePath(), 0, 0, 0)
+
+    If swDraw Is Nothing Then GoTo CleanFail
+
+    Dim swSheet As Object
+
+    Set swSheet = swDraw.GetCurrentSheet
+
+    Dim shW As Double
+
+    Dim shH As Double
+
+    swSheet.GetSize shW, shH
+
+    On Error Resume Next
+
+    swSheet.SetScale 1#, 1#, False, False
+
+    On Error GoTo 0
+
+    Dim viewName As String
+
+    If isSM Then
+
+        viewName = "*Front"
+
+    Else
+
+        viewName = PickBestViewName(swPart)
+
+    End If
+
+    Dim swView As Object
+
+    Set swView = swDraw.CreateDrawViewFromModelView3(swPart.GetPathName, viewName, shW / 2, shH / 2, 0)
+
+    swDraw.EditRebuild3
+
+    If swView Is Nothing And isSM Then
+
+        Set swView = swDraw.CreateDrawViewFromModelView3(swPart.GetPathName, "Flat pattern", shW / 2, shH / 2, 0)
+
+        swDraw.EditRebuild3
+
+    End If
+
+    If swView Is Nothing Then
+
+        Debug.Print "      Precut drawing view failed"
+
+        GoTo CleanFail
+
+    End If
+
+    On Error Resume Next
+
+    swView.UseSheetScale = False
+
+    On Error GoTo 0
+
+    Dim sv(1) As Double
+
+    sv(0) = 1#
+
+    sv(1) = 1#
+
+    swView.ScaleRatio = sv
+
+    swDraw.EditRebuild3
+
+    Dim outline As Variant
+
+    outline = swView.GetOutline
+
+    If IsEmpty(outline) Then
+
+        Debug.Print "      Precut drawing view has no outline"
+
+        GoTo CleanFail
+
+    End If
+
+    If Not DrawPrecutRectangleOnSheet(swDraw, swSheet, outline) Then
+
+        Debug.Print "      Could not draw precut rectangle"
+
+        GoTo CleanFail
+
+    End If
+
+    swDraw.ClearSelection2 True
+
+    swDraw.EditRebuild3
+
+    ExportPrecutDrawingWithBox = SaveDrawingAsDxf1To1(swDraw, filePath)
+
+    Debug.Print "      Drawing precut saved=" & ExportPrecutDrawingWithBox
+
+CleanUp:
+
+    On Error Resume Next
+
+    If Not swDraw Is Nothing Then swApp.CloseDoc swDraw.GetTitle
+
+    On Error GoTo 0
+
+    If wasSupp Then
+
+        flatFeat.SetSuppression2 0, 2, Nothing
+
+        swPart.EditRebuild3
+
+    End If
+
+    Exit Function
+
+CleanFail:
+
+    ExportPrecutDrawingWithBox = False
+
+    GoTo CleanUp
+
+End Function
+
+Function DrawPrecutRectangleOnSheet(swDraw As Object, swSheet As Object, outline As Variant) As Boolean
+
+    Dim offsetMeters As Double
+
+    offsetMeters = g_precutOffset_mm / 1000#
+
+    Dim x1 As Double
+
+    Dim y1 As Double
+
+    Dim x2 As Double
+
+    Dim y2 As Double
+
+    x1 = outline(0) - offsetMeters
+
+    y1 = outline(1) - offsetMeters
+
+    x2 = outline(2) + offsetMeters
+
+    y2 = outline(3) + offsetMeters
+
+    On Error Resume Next
+
+    swDraw.ActivateSheet swSheet.GetName
+
+    swDraw.ClearSelection2 True
+
+    swDraw.SketchManager.InsertSketch True
+
+    swDraw.SketchManager.CreateLine x1, y1, 0#, x2, y1, 0#
+
+    swDraw.SketchManager.CreateLine x2, y1, 0#, x2, y2, 0#
+
+    swDraw.SketchManager.CreateLine x2, y2, 0#, x1, y2, 0#
+
+    swDraw.SketchManager.CreateLine x1, y2, 0#, x1, y1, 0#
+
+    swDraw.SketchManager.InsertSketch True
+
+    DrawPrecutRectangleOnSheet = (Err.Number = 0)
+
+    Err.Clear
+
+    On Error GoTo 0
+
+End Function
+
+Function WritePrecutBoxDxf(swPart As Object, filePath As String, isSM As Boolean) As Boolean
+
+    Dim flatFeat As Object
+
+    Dim wasSupp As Boolean
+
+    wasSupp = False
+
+    If isSM Then
+
+        Set flatFeat = FindFlatPatternFeat(swPart)
+
+        If Not flatFeat Is Nothing Then
+
+            wasSupp = flatFeat.IsSuppressed
+
+            If wasSupp Then
+
+                flatFeat.SetSuppression2 2, 2, Nothing
+
+                swPart.EditRebuild3
+
+            End If
+
+        End If
+
+    End If
+
+    Dim t As Double
+
+    Dim w As Double
+
+    Dim longDim As Double
+
+    If Not GetSortedBoxDimsMM(swPart, t, w, longDim) Then GoTo CleanFail
+
+    Dim off As Double
+
+    off = g_precutOffset_mm
+
+    Dim width As Double
+
+    Dim height As Double
+
+    width = longDim + 2# * off
+
+    height = w + 2# * off
+
+    DeleteExistingFile filePath
+
+    Dim ff As Integer
+
+    ff = FreeFile
+
+    On Error GoTo WriteFail
+
+    Open filePath For Output As #ff
+
+    Print #ff, "0"
+    Print #ff, "SECTION"
+    Print #ff, "2"
+    Print #ff, "HEADER"
+    Print #ff, "9"
+    Print #ff, "$INSUNITS"
+    Print #ff, "70"
+    Print #ff, "4"
+    Print #ff, "0"
+    Print #ff, "ENDSEC"
+    Print #ff, "0"
+    Print #ff, "SECTION"
+    Print #ff, "2"
+    Print #ff, "ENTITIES"
+    Print #ff, "0"
+    Print #ff, "LWPOLYLINE"
+    Print #ff, "8"
+    Print #ff, "0"
+    Print #ff, "90"
+    Print #ff, "4"
+    Print #ff, "70"
+    Print #ff, "1"
+    Print #ff, "10"
+    Print #ff, "0"
+    Print #ff, "20"
+    Print #ff, "0"
+    Print #ff, "10"
+    Print #ff, DxfNumber(width)
+    Print #ff, "20"
+    Print #ff, "0"
+    Print #ff, "10"
+    Print #ff, DxfNumber(width)
+    Print #ff, "20"
+    Print #ff, DxfNumber(height)
+    Print #ff, "10"
+    Print #ff, "0"
+    Print #ff, "20"
+    Print #ff, DxfNumber(height)
+    Print #ff, "0"
+    Print #ff, "ENDSEC"
+    Print #ff, "0"
+    Print #ff, "EOF"
+
+    Close #ff
+
+    WritePrecutBoxDxf = (Dir(filePath) <> "")
+
+    Debug.Print "      Box DXF saved=" & WritePrecutBoxDxf & " size=" & Round(width, 2) & "x" & Round(height, 2) & "mm"
+
+CleanUp:
+
+    If wasSupp Then
+
+        flatFeat.SetSuppression2 0, 2, Nothing
+
+        swPart.EditRebuild3
+
+    End If
+
+    Exit Function
+
+WriteFail:
+
+    On Error Resume Next
+
+    Close #ff
+
+    On Error GoTo 0
+
+CleanFail:
+
+    WritePrecutBoxDxf = False
+
+    Debug.Print "      Box DXF failed"
+
+    GoTo CleanUp
+
+End Function
+
+Function DxfNumber(v As Double) As String
+
+    DxfNumber = Replace(CStr(Round(v, 4)), ",", ".")
+
+End Function
+
+' ================================================================
+
+Function GetOuterEdgesInView(swView As Object) As Variant
+
+    Dim vComps As Variant
+
+    vComps = swView.GetVisibleComponents
+
+    Dim isPart As Boolean
+
+    isPart = IsEmpty(vComps)
+
+
+
+    Dim compObj As Object
+
+    If isPart Then
+
+        Set compObj = Nothing
+
+    Else
+
+        Set compObj = vComps(0)
+
+    End If
+
+
+
+    Dim vEdges As Variant
+
+    vEdges = swView.GetVisibleEntities2(compObj, 1)
+
+    If IsEmpty(vEdges) Then
+
+        GetOuterEdgesInView = Empty
+
+        Exit Function
+
+    End If
+
+
+
+    Dim maxArea As Double
+
+    maxArea = 0
+
+    Dim maxFace As Object
+
+
+
+    Dim i As Long
+
+    For i = 0 To UBound(vEdges)
+
+        Dim e As Object
+
+        Set e = vEdges(i)
+
+        On Error Resume Next
+
+        Dim adjFaces As Variant
+
+        adjFaces = e.GetTwoAdjacentFaces
+
+        On Error GoTo 0
+
+        If Not IsEmpty(adjFaces) Then
+
+            Dim f As Long
+
+            For f = 0 To 1
+
+                If Not IsNull(adjFaces(f)) Then
+
+                    Dim fc As Object
+
+                    Set fc = adjFaces(f)
+
+                    On Error Resume Next
+
+                    Dim surf As Object
+
+                    Set surf = fc.GetSurface
+
+                    On Error GoTo 0
+
+                    If Not surf Is Nothing Then
+
+                        If surf.IsPlane Then
+
+                            Dim a As Double
+
+                            a = fc.GetArea
+
+                            If a > maxArea Then
+
+                                maxArea = a
+
+                                Set maxFace = fc
+
+                            End If
+
+                        End If
+
+                    End If
+
+                End If
+
+            Next f
+
+        End If
+
+    Next i
+
+
+
+    If maxFace Is Nothing Then
+
+        GetOuterEdgesInView = Empty
+
+        Exit Function
+
+    End If
+
+
+
+    Dim loops As Variant
+
+    loops = maxFace.GetLoops
+
+    If IsEmpty(loops) Then
+
+        GetOuterEdgesInView = Empty
+
+        Exit Function
+
+    End If
+
+
+
+    Dim L As Long
+
+    For L = 0 To UBound(loops)
+
+        Dim lp As Object
+
+        Set lp = loops(L)
+
+        If lp.IsOuter Then
+
+            Dim eds As Variant
+
+            eds = lp.GetEdges
+
+            If Not IsEmpty(eds) Then
+
+                GetOuterEdgesInView = eds
+
+                Exit Function
+
+            End If
+
+        End If
+
+    Next L
+
+
+
+    GetOuterEdgesInView = Empty
+
+End Function
+
+
+
+' ================================================================
+
+Sub SelectAllSketchSegmentsInView(sketch As Object, selData As Object)
+
+    Dim segs As Variant
+
+    segs = sketch.GetSketchSegments
+
+    If IsEmpty(segs) Then Exit Sub
+
+    Dim i As Long
+
+    For i = 0 To UBound(segs)
+
+        Dim s As Object
+
+        Set s = segs(i)
+
+        On Error Resume Next
+
+        s.Select4 True, selData
+
+        On Error GoTo 0
+
+    Next i
+
+End Sub
+
+
+
+Sub DeleteConstructionEntities(sketch As Object, swDoc As Object, selData As Object)
+
+    Dim segs As Variant
+
+    segs = sketch.GetSketchSegments
+
+    If IsEmpty(segs) Then Exit Sub
+
+    swDoc.ClearSelection2 True
+
+    Dim cnt As Long
+
+    cnt = 0
+
+    Dim i As Long
+
+    For i = 0 To UBound(segs)
+
+        Dim s As Object
+
+        Set s = segs(i)
+
+        Dim isC As Boolean
+
+        isC = False
+
+        On Error Resume Next
+
+        isC = s.ConstructionGeometry
+
+        On Error GoTo 0
+
+        If isC Then
+
+            On Error Resume Next
+
+            s.Select4 True, selData
+
+            On Error GoTo 0
+
+            cnt = cnt + 1
+
+        End If
+
+    Next i
+
+    Debug.Print "      Deleting " & cnt & " construction entities"
+
+    If cnt > 0 Then swDoc.EditDelete
+
+End Sub
+
+
+
+Function OffsetIsOutward(sketch As Object) As Boolean
+
+    Dim segs As Variant
+
+    segs = sketch.GetSketchSegments
+
+    If IsEmpty(segs) Then
+
+        OffsetIsOutward = False
+
+        Exit Function
+
+    End If
+
+
+
+    Dim cMinX As Double, cMinY As Double, cMaxX As Double, cMaxY As Double
+
+    Dim oMinX As Double, oMinY As Double, oMaxX As Double, oMaxY As Double
+
+    cMinX = 1E+30
+
+    cMinY = 1E+30
+
+    cMaxX = -1E+30
+
+    cMaxY = -1E+30
+
+    oMinX = 1E+30
+
+    oMinY = 1E+30
+
+    oMaxX = -1E+30
+
+    oMaxY = -1E+30
+
+
+
+    Dim i As Long
+
+    For i = 0 To UBound(segs)
+
+        Dim s As Object
+
+        Set s = segs(i)
+
+        If Not s Is Nothing Then
+
+            Dim isC As Boolean
+
+            isC = False
+
+            On Error Resume Next
+
+            isC = s.ConstructionGeometry
+
+            On Error GoTo 0
+
+            Dim bx As Variant
+
+            On Error Resume Next
+
+            bx = s.GetEndPoints
+
+            On Error GoTo 0
+
+            If Not IsEmpty(bx) Then
+
+                If isC Then
+
+                    If bx(0) < cMinX Then cMinX = bx(0)
+
+                    If bx(1) < cMinY Then cMinY = bx(1)
+
+                    If bx(0) > cMaxX Then cMaxX = bx(0)
+
+                    If bx(1) > cMaxY Then cMaxY = bx(1)
+
+                    If bx(3) < cMinX Then cMinX = bx(3)
+
+                    If bx(4) < cMinY Then cMinY = bx(4)
+
+                    If bx(3) > cMaxX Then cMaxX = bx(3)
+
+                    If bx(4) > cMaxY Then cMaxY = bx(4)
+
+                Else
+
+                    If bx(0) < oMinX Then oMinX = bx(0)
+
+                    If bx(1) < oMinY Then oMinY = bx(1)
+
+                    If bx(0) > oMaxX Then oMaxX = bx(0)
+
+                    If bx(1) > oMaxY Then oMaxY = bx(1)
+
+                    If bx(3) < oMinX Then oMinX = bx(3)
+
+                    If bx(4) < oMinY Then oMinY = bx(4)
+
+                    If bx(3) > oMaxX Then oMaxX = bx(3)
+
+                    If bx(4) > oMaxY Then oMaxY = bx(4)
+
+                End If
+
+            End If
+
+        End If
+
+    Next i
+
+
+
+    Dim cArea As Double
+
+    cArea = (cMaxX - cMinX) * (cMaxY - cMinY)
+
+    Dim oArea As Double
+
+    oArea = (oMaxX - oMinX) * (oMaxY - oMinY)
+
+    OffsetIsOutward = (oArea > cArea)
+
+End Function
+
+
+
+' ================================================================
+
+Function PickBestViewName(swPart As Object) As String
+
+    Dim box As Variant
+
+    box = SafeGetPartBox(swPart)
+
+    If IsEmpty(box) Then
+
+        PickBestViewName = "*Front"
+
+        Exit Function
+
+    End If
+
+
+
+    Dim x As Double
+
+    Dim y As Double
+
+    Dim z As Double
+
+    x = Abs(box(3) - box(0))
+
+    y = Abs(box(4) - box(1))
+
+    z = Abs(box(5) - box(2))
+
+
+
+    If x <= y And x <= z Then
+
+        PickBestViewName = "*Right"
+
+    ElseIf y <= x And y <= z Then
+
+        PickBestViewName = "*Top"
+
+    Else
+
+        PickBestViewName = "*Front"
+
+    End If
+
+End Function
+
+
+
+' ================================================================
+
+'  SAFE BOUNDING BOX - tries GetPartBox, falls back to GetBodies+GetBodyBox
+
+' ================================================================
+
+Function SafeGetPartBox(swPart As Object) As Variant
+
+    Dim box As Variant
+
+
+
+    ' Try GetPartBox first
+
+    On Error Resume Next
+
+    box = swPart.GetPartBox(True)
+
+    On Error GoTo 0
+
+
+
+    If Not IsEmpty(box) Then
+
+        SafeGetPartBox = box
+
+        Exit Function
+
+    End If
+
+
+
+    Debug.Print "      GetPartBox failed, falling back to GetBodies..."
+
+
+
+    ' Fallback: union of all body boxes
+
+    Dim bodies As Variant
+
+    On Error Resume Next
+
+    bodies = swPart.GetBodies2(0, False)
+
+    On Error GoTo 0
+
+    If IsEmpty(bodies) Then
+
+        On Error Resume Next
+
+        bodies = swPart.GetBodies(0)
+
+        On Error GoTo 0
+
+    End If
+
+    If IsEmpty(bodies) Then
+
+        Debug.Print "      No bodies either"
+
+        SafeGetPartBox = Empty
+
+        Exit Function
+
+    End If
+
+
+
+    Dim minX As Double, minY As Double, minZ As Double
+
+    Dim maxX As Double, maxY As Double, maxZ As Double
+
+    minX = 1E+30
+
+    minY = 1E+30
+
+    minZ = 1E+30
+
+    maxX = -1E+30
+
+    maxY = -1E+30
+
+    maxZ = -1E+30
+
+
+
+    Dim i As Long
+
+    For i = 0 To UBound(bodies)
+
+        Dim b As Object
+
+        Set b = bodies(i)
+
+        If Not b Is Nothing Then
+
+            Dim bb As Variant
+
+            On Error Resume Next
+
+            bb = b.GetBodyBox
+
+            On Error GoTo 0
+
+            If Not IsEmpty(bb) Then
+
+                If bb(0) < minX Then minX = bb(0)
+
+                If bb(1) < minY Then minY = bb(1)
+
+                If bb(2) < minZ Then minZ = bb(2)
+
+                If bb(3) > maxX Then maxX = bb(3)
+
+                If bb(4) > maxY Then maxY = bb(4)
+
+                If bb(5) > maxZ Then maxZ = bb(5)
+
+            End If
+
+        End If
+
+    Next i
+
+
+
+    If minX > 1E+29 Then
+
+        SafeGetPartBox = Empty
+
+        Exit Function
+
+    End If
+
+
+
+    Dim result(5) As Double
+
+    result(0) = minX
+
+    result(1) = minY
+
+    result(2) = minZ
+
+    result(3) = maxX
+
+    result(4) = maxY
+
+    result(5) = maxZ
+
+    SafeGetPartBox = result
+
+End Function
+
+
+
+' ================================================================
+
+Function FindFlatPatternFeat(swPart As Object) As Object
+
+    Dim f As Object
+
+    Set f = swPart.FirstFeature
+
+    Do While Not f Is Nothing
+
+        If f.GetTypeName2 = "FlatPattern" Then
+
+            Set FindFlatPatternFeat = f
+
+            Exit Function
+
+        End If
+
+        Set f = f.GetNextFeature
+
+    Loop
+
+End Function
+
+
+
+Function IsSheetMetal(swPart As Object) As Boolean
+
+    Dim f As Object
+
+    Set f = swPart.FirstFeature
+
+    Do While Not f Is Nothing
+
+        If f.GetTypeName2 = "SheetMetal" Then
+
+            IsSheetMetal = True
+
+            Exit Function
+
+        End If
+
+        Set f = f.GetNextFeature
+
+    Loop
+
+End Function
+
+
+
+Function IsSheetMetalSafe(swPart As Object) As Boolean
+
+    IsSheetMetalSafe = IsSheetMetal(swPart)
+
+    If Not IsSheetMetalSafe Then IsSheetMetalSafe = PartHasSheetMetalBody(swPart)
+
+End Function
+
+Function PartHasSheetMetalBody(swPart As Object) As Boolean
+
+    Dim bodies As Variant
+
+    bodies = GetPartBodies(swPart)
+
+    If IsEmpty(bodies) Then Exit Function
+
+    Dim i As Long
+
+    For i = 0 To UBound(bodies)
+
+        Dim b As Object
+
+        Set b = bodies(i)
+
+        If Not b Is Nothing Then
+
+            On Error Resume Next
+
+            PartHasSheetMetalBody = b.IsSheetMetal
+
+            On Error GoTo 0
+
+            If PartHasSheetMetalBody Then Exit Function
+
+        End If
+
+    Next i
+
+End Function
+
+Function GetSheetMetalThickness(swPart As Object) As Double
+    Dim f As Object
+
+    Set f = swPart.FirstFeature
+
+    Do While Not f Is Nothing
+
+        If f.GetTypeName2 = "SheetMetal" Then
+
+            On Error Resume Next
+
+            GetSheetMetalThickness = f.GetDefinition.thickness * 1000
+
+            On Error GoTo 0
+
+            If GetSheetMetalThickness <= 0 Then GetSheetMetalThickness = GetBoundingThickness(swPart)
+            Exit Function
+
+        End If
+
+        Set f = f.GetNextFeature
+
+    Loop
+
+End Function
+
+
+
+Function GetSheetMetalThicknessFallback(swPart As Object) As Double
+
+    GetSheetMetalThicknessFallback = GetSheetMetalThickness(swPart)
+
+    If GetSheetMetalThicknessFallback <= 0 Then GetSheetMetalThicknessFallback = GetBoundingThickness(swPart)
+
+End Function
+
+Function IsThinPlateLike(swPart As Object) As Boolean
+
+    Dim t As Double
+
+    Dim w As Double
+
+    Dim longDim As Double
+
+    If Not GetSortedBoxDimsMM(swPart, t, w, longDim) Then Exit Function
+
+    Debug.Print "    Thin check dims mm: " & Round(t, 2) & " x " & Round(w, 2) & " x " & Round(longDim, 2)
+
+    If t > THICKNESS_LIMIT Then Exit Function
+
+    If t <= 0 Then Exit Function
+
+    IsThinPlateLike = (w >= t * THIN_PLATE_MIN_RATIO And longDim >= t * THIN_PLATE_MIN_RATIO)
+
+    If Not IsThinPlateLike Then
+
+        Debug.Print "    Rejected thin solid: needs other dimensions >= " & THIN_PLATE_MIN_RATIO & "x thickness"
+
+        Exit Function
+
+    End If
+
+    If Not HasSheetLikePlanarFaces(swPart, w, longDim) Then
+
+        Debug.Print "    Rejected thin solid: mostly curved/noodle-like surface"
+
+        IsThinPlateLike = False
+
+    End If
+
+End Function
+
+Function IsWasherLikeThinSolid(swPart As Object) As Boolean
+
+    Dim t As Double
+
+    Dim w As Double
+
+    Dim longDim As Double
+
+    If Not GetSortedBoxDimsMM(swPart, t, w, longDim) Then Exit Function
+
+    If t <= 0# Or longDim <= 0# Or w <= 0# Then Exit Function
+
+    Dim ratio As Double
+    Dim aspect As Double
+    ratio = longDim / t
+    aspect = w / longDim
+
+    ' Three criteria. A real washer is small, has a low long/thick ratio
+    ' (relatively thick for its diameter), and has a roughly square/circular
+    ' footprint (width close to longDim). Failing any one of these excludes
+    ' the part from the washerlike bin.
+    IsWasherLikeThinSolid = (longDim < WASHERLIKE_MAX_LONG_MM) _
+                            And (ratio < WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO) _
+                            And (aspect >= WASHERLIKE_MIN_ASPECT)
+
+End Function
+
+Function EnsureSubFolder(parentFolder As String, subName As String) As String
+
+    Dim baseFolder As String
+
+    baseFolder = parentFolder
+
+    If Right(baseFolder, 1) <> "\" Then baseFolder = baseFolder & "\"
+
+    EnsureSubFolder = baseFolder & subName & "\"
+
+    If Dir(EnsureSubFolder, vbDirectory) = "" Then MkDir EnsureSubFolder
+
+End Function
+
+Function HasSheetLikePlanarFaces(swPart As Object, midDimMm As Double, maxDimMm As Double) As Boolean
+
+    Dim bodies As Variant
+
+    bodies = GetPartBodies(swPart)
+
+    If IsEmpty(bodies) Then Exit Function
+
+    Dim totalArea As Double
+
+    Dim planarArea As Double
+
+    Dim largestPlanarArea As Double
+
+    Dim planarCount As Long
+
+    Dim bodyIndex As Long
+
+    For bodyIndex = 0 To UBound(bodies)
+
+        Dim b As Object
+
+        Set b = bodies(bodyIndex)
+
+        If Not b Is Nothing Then
+
+            Dim faces As Variant
+
+            On Error Resume Next
+
+            faces = b.GetFaces
+
+            On Error GoTo 0
+
+            If Not IsEmpty(faces) Then
+
+                Dim faceIndex As Long
+
+                For faceIndex = 0 To UBound(faces)
+
+                    Dim f As Object
+
+                    Set f = faces(faceIndex)
+
+                    If Not f Is Nothing Then
+
+                        Dim area As Double
+
+                        area = 0#
+
+                        On Error Resume Next
+
+                        area = f.GetArea
+
+                        On Error GoTo 0
+
+                        If area > 0# Then
+
+                            totalArea = totalArea + area
+
+                            If IsPlanarFace(f) Then
+
+                                planarCount = planarCount + 1
+
+                                planarArea = planarArea + area
+
+                                If area > largestPlanarArea Then largestPlanarArea = area
+
+                            End If
+
+                        End If
+
+                    End If
+
+                Next faceIndex
+
+            End If
+
+        End If
+
+    Next bodyIndex
+
+    If totalArea <= 0# Then Exit Function
+
+    Dim footprintArea As Double
+
+    footprintArea = (midDimMm * maxDimMm) / 1000000#
+
+    Dim planarRatio As Double
+
+    planarRatio = planarArea / totalArea
+
+    Debug.Print "    Planar face check: planar=" & Round(planarRatio * 100#, 1) & "% count=" & planarCount
+
+    If planarCount < 2 Then Exit Function
+
+    If planarRatio < MIN_PLANAR_AREA_RATIO Then Exit Function
+
+    If footprintArea > 0# Then
+
+        If largestPlanarArea < footprintArea * MIN_LARGEST_PLANAR_FOOTPRINT_RATIO Then Exit Function
+
+    End If
+
+    HasSheetLikePlanarFaces = True
+
+End Function
+
+Function GetSortedBoxDimsMM(swPart As Object, ByRef minDim As Double, ByRef midDim As Double, ByRef maxDim As Double) As Boolean
+
+    Dim box As Variant
+
+    box = SafeGetPartBox(swPart)
+
+    If IsEmpty(box) Then Exit Function
+
+    Dim a As Double
+
+    Dim b As Double
+
+    Dim c As Double
+
+    a = Abs(box(3) - box(0)) * 1000#
+
+    b = Abs(box(4) - box(1)) * 1000#
+
+    c = Abs(box(5) - box(2)) * 1000#
+
+    Dim tmp As Double
+
+    If a > b Then
+
+        tmp = a
+
+        a = b
+
+        b = tmp
+
+    End If
+
+    If b > c Then
+
+        tmp = b
+
+        b = c
+
+        c = tmp
+
+    End If
+
+    If a > b Then
+
+        tmp = a
+
+        a = b
+
+        b = tmp
+
+    End If
+
+    minDim = a
+
+    midDim = b
+
+    maxDim = c
+
+    GetSortedBoxDimsMM = True
+
+End Function
+
+Function GetBoundingThickness(swPart As Object) As Double
+    Dim box As Variant
+
+    box = SafeGetPartBox(swPart)
+
+    If IsEmpty(box) Then
+
+        Debug.Print "    No bounding box, treat as thick"
+
+        GetBoundingThickness = 9999
+
+        Exit Function
+
+    End If
+
+
+
+    Dim x As Double
+
+    Dim y As Double
+
+    Dim z As Double
+
+    x = Abs(box(3) - box(0)) * 1000
+
+    y = Abs(box(4) - box(1)) * 1000
+
+    z = Abs(box(5) - box(2)) * 1000
+
+
+
+    GetBoundingThickness = x
+
+    If y < GetBoundingThickness Then GetBoundingThickness = y
+
+    If z < GetBoundingThickness Then GetBoundingThickness = z
+
+End Function
+
+' Reads a plane face's normal + a point on the plane via Surface.PlaneParams.
+' PlaneParams returns (rootX, rootY, rootZ, normalX, normalY, normalZ) in
+' some SW versions and (normalX, normalY, normalZ, rootX, rootY, rootZ) in
+' others. We normalize the normal and pick the layout whose normal length
+' is closer to 1.
+Function TryGetPlaneNormalAndPoint(swFace As Object, outNorm() As Double, _
+                                   outPoint() As Double) As Boolean
+
+    TryGetPlaneNormalAndPoint = False
+
+    If swFace Is Nothing Then Exit Function
+
+    Dim surf As Object
+
+    On Error Resume Next
+
+    Set surf = swFace.GetSurface
+
+    On Error GoTo 0
+
+    If surf Is Nothing Then Exit Function
+
+    If Not surf.IsPlane Then Exit Function
+
+    Dim params As Variant
+
+    params = Empty
+
+    On Error Resume Next
+
+    params = surf.PlaneParams
+
+    On Error GoTo 0
+
+    If IsEmpty(params) Then Exit Function
+
+    If UBound(params) < 5 Then Exit Function
+
+
+
+    Dim aLen As Double
+
+    aLen = Sqr(params(0) * params(0) + params(1) * params(1) + params(2) * params(2))
+
+    Dim bLen As Double
+
+    bLen = Sqr(params(3) * params(3) + params(4) * params(4) + params(5) * params(5))
+
+
+
+    If Abs(aLen - 1#) <= Abs(bLen - 1#) Then
+
+        outNorm(0) = params(0)
+
+        outNorm(1) = params(1)
+
+        outNorm(2) = params(2)
+
+        outPoint(0) = params(3)
+
+        outPoint(1) = params(4)
+
+        outPoint(2) = params(5)
+
+    Else
+
+        outNorm(0) = params(3)
+
+        outNorm(1) = params(4)
+
+        outNorm(2) = params(5)
+
+        outPoint(0) = params(0)
+
+        outPoint(1) = params(1)
+
+        outPoint(2) = params(2)
+
+    End If
+
+
+
+    Dim nLen As Double
+
+    nLen = Sqr(outNorm(0) * outNorm(0) + outNorm(1) * outNorm(1) + outNorm(2) * outNorm(2))
+
+    If nLen <= 0.000001 Then Exit Function
+
+    outNorm(0) = outNorm(0) / nLen
+
+    outNorm(1) = outNorm(1) / nLen
+
+    outNorm(2) = outNorm(2) / nLen
+
+
+
+    ' Face2.FaceInSurfaceSense returns True when the face's outward normal is
+    ' opposite to the surface normal. Flip so we always get the face normal.
+    Dim flip As Boolean
+
+    flip = False
+
+    On Error Resume Next
+
+    flip = CBool(swFace.FaceInSurfaceSense)
+
+    On Error GoTo 0
+
+    If flip Then
+
+        outNorm(0) = -outNorm(0)
+
+        outNorm(1) = -outNorm(1)
+
+        outNorm(2) = -outNorm(2)
+
+    End If
+
+
+
+    TryGetPlaneNormalAndPoint = True
+
+End Function
+
+' Perpendicular distance from a point to the plane defined by (planeNorm, planePoint).
+Function SignedPlaneDistance(planeNorm() As Double, planePoint() As Double, _
+                             ByVal qx As Double, ByVal qy As Double, ByVal qz As Double) As Double
+
+    SignedPlaneDistance = (qx - planePoint(0)) * planeNorm(0) _
+                        + (qy - planePoint(1)) * planeNorm(1) _
+                        + (qz - planePoint(2)) * planeNorm(2)
+
+End Function
+
+' Iterates all planar faces of a part. Returns the perpendicular span of the
+' part along the largest-planar-face's normal. This is the true slab
+' thickness of a thin solid, independent of how the part is oriented in
+' world coords. Returns 0 if no usable planar face is found.
+Function GetThicknessAlongLargestPlaneNormal(swPart As Object) As Double
+
+    GetThicknessAlongLargestPlaneNormal = 0
+
+    Dim faceMax As Object
+
+    Set faceMax = FindLargestPlanarFace(swPart)
+
+    If faceMax Is Nothing Then Exit Function
+
+    Dim planeN(2) As Double
+
+    Dim planeP(2) As Double
+
+    If Not TryGetPlaneNormalAndPoint(faceMax, planeN, planeP) Then Exit Function
+
+
+
+    Dim bodies As Variant
+
+    bodies = GetPartBodies(swPart)
+
+    If IsEmpty(bodies) Then Exit Function
+
+
+
+    Dim minProj As Double
+
+    Dim maxProj As Double
+
+    Dim seen As Boolean
+
+    seen = False
+
+    minProj = 0
+
+    maxProj = 0
+
+
+
+    Dim bi As Long
+
+    For bi = 0 To UBound(bodies)
+
+        Dim b As Object
+
+        Set b = bodies(bi)
+
+        If b Is Nothing Then GoTo NextBody
+
+
+
+        Dim faces As Variant
+
+        faces = Empty
+
+        On Error Resume Next
+
+        faces = b.GetFaces
+
+        On Error GoTo 0
+
+        If IsEmpty(faces) Then GoTo NextBody
+
+
+
+        Dim fi As Long
+
+        For fi = 0 To UBound(faces)
+
+            Dim f As Object
+
+            Set f = faces(fi)
+
+            If f Is Nothing Then GoTo NextFace
+
+
+
+            Dim faceBox As Variant
+
+            faceBox = Empty
+
+            On Error Resume Next
+
+            faceBox = f.GetBox
+
+            On Error GoTo 0
+
+            If IsEmpty(faceBox) Then GoTo NextFace
+
+            If UBound(faceBox) < 5 Then GoTo NextFace
+
+
+
+            ' Project all 8 face-box corners onto the plane normal.
+            Dim cx As Long
+
+            For cx = 0 To 1
+
+                Dim cy As Long
+
+                For cy = 0 To 1
+
+                    Dim cz As Long
+
+                    For cz = 0 To 1
+
+                        Dim px As Double
+
+                        Dim py As Double
+
+                        Dim pz As Double
+
+                        px = faceBox(IIf(cx = 0, 0, 3))
+
+                        py = faceBox(IIf(cy = 0, 1, 4))
+
+                        pz = faceBox(IIf(cz = 0, 2, 5))
+
+                        Dim sd As Double
+
+                        sd = SignedPlaneDistance(planeN, planeP, px, py, pz)
+
+                        If Not seen Then
+
+                            minProj = sd
+
+                            maxProj = sd
+
+                            seen = True
+
+                        Else
+
+                            If sd < minProj Then minProj = sd
+
+                            If sd > maxProj Then maxProj = sd
+
+                        End If
+
+                    Next cz
+
+                Next cy
+
+            Next cx
+
+NextFace:
+
+        Next fi
+
+NextBody:
+
+    Next bi
+
+
+
+    If Not seen Then Exit Function
+
+    GetThicknessAlongLargestPlaneNormal = (maxProj - minProj) * 1000
+
+End Function
+
+' Public: pick the most reliable thickness for a thin solid part.
+' Priority chain:
+'   1) Vertex-based projection onto largest planar face normal (most
+'      accurate -- uses actual body geometry, immune to chamfers).
+'   2) Face-bbox projection (older method; can over-estimate by ~1 mm
+'      for chamfered/curved parts because face-bboxes are axis-aligned).
+'   3) World bounding box min-axis (last resort; orientation-dependent
+'      and was the original source of the thickness-classification bug for axis-aligned
+'      parts with features that extruded slightly past the main plate).
+Function GetThinSolidThickness(swPart As Object) As Double
+
+    Dim viaVerts As Double
+    viaVerts = GetThicknessViaVertexProjection(swPart)
+
+    Dim viaPlane As Double
+    viaPlane = GetThicknessAlongLargestPlaneNormal(swPart)
+
+    Dim viaBox As Double
+    viaBox = GetBoundingThickness(swPart)
+
+    If viaVerts > 0.001 Then
+
+        GetThinSolidThickness = viaVerts
+
+        Debug.Print "    thickness via vertex projection: " & viaVerts & " mm (face-bbox: " & viaPlane & " mm, world-bbox: " & viaBox & " mm)"
+
+    ElseIf viaPlane > 0.001 Then
+
+        GetThinSolidThickness = viaPlane
+
+        Debug.Print "    thickness via plane normal (vertex method failed): " & viaPlane & " mm (bbox: " & viaBox & " mm)"
+
+    Else
+
+        GetThinSolidThickness = viaBox
+
+        Debug.Print "    thickness via bbox fallback: " & viaBox & " mm"
+
+    End If
+
+End Function
+
+' Vertex-based thickness: project EVERY vertex of every body in the part
+' onto the normal of the largest planar face, then take max-min range.
+' Unlike face-bbox projection, this uses real geometry -- chamfers and
+' curved features don't inflate the result because we only measure where
+' actual vertices live.
+Function GetThicknessViaVertexProjection(swPart As Object) As Double
+
+    GetThicknessViaVertexProjection = 0
+
+    Dim faceMax As Object
+    Set faceMax = FindLargestPlanarFace(swPart)
+    If faceMax Is Nothing Then Exit Function
+
+    Dim planeN(2) As Double
+    Dim planeP(2) As Double
+    If Not TryGetPlaneNormalAndPoint(faceMax, planeN, planeP) Then Exit Function
+
+    Dim bodies As Variant
+    bodies = GetPartBodies(swPart)
+    If IsEmpty(bodies) Then Exit Function
+
+    Dim minProj As Double
+    Dim maxProj As Double
+    Dim seen As Boolean
+    seen = False
+    minProj = 0
+    maxProj = 0
+
+    Dim bi As Long
+    For bi = 0 To UBound(bodies)
+
+        Dim b As Object
+        Set b = bodies(bi)
+        If b Is Nothing Then GoTo NextBody
+
+        Dim edges As Variant
+        edges = Empty
+        On Error Resume Next
+        edges = b.GetEdges
+        On Error GoTo 0
+        If IsEmpty(edges) Then GoTo NextBody
+
+        Dim ei As Long
+        For ei = 0 To UBound(edges)
+
+            Dim ed As Object
+            Set ed = edges(ei)
+            If ed Is Nothing Then GoTo NextEdge
+
+            ' Each edge has two endpoint vertices. GetStartVertex/GetEndVertex
+            ' return Nothing for closed edges (full circles, etc.) - in that
+            ' case the edge curve still bounds the body but we can't get
+            ' vertices, so skip. Face-bbox fallback catches those parts.
+            Dim startVtx As Object
+            Dim endVtx As Object
+            Set startVtx = Nothing
+            Set endVtx = Nothing
+            On Error Resume Next
+            Set startVtx = ed.GetStartVertex
+            Set endVtx = ed.GetEndVertex
+            On Error GoTo 0
+
+            ProjectVertexOntoPlane startVtx, planeN, planeP, minProj, maxProj, seen
+            ProjectVertexOntoPlane endVtx, planeN, planeP, minProj, maxProj, seen
+
+NextEdge:
+        Next ei
+
+NextBody:
+    Next bi
+
+    If Not seen Then Exit Function
+
+    GetThicknessViaVertexProjection = (maxProj - minProj) * 1000
+
+End Function
+
+Sub ProjectVertexOntoPlane(vtx As Object, planeN() As Double, planeP() As Double, ByRef minProj As Double, ByRef maxProj As Double, ByRef seen As Boolean)
+
+    If vtx Is Nothing Then Exit Sub
+
+    Dim pt As Variant
+    pt = Empty
+    On Error Resume Next
+    pt = vtx.GetPoint
+    On Error GoTo 0
+
+    If IsEmpty(pt) Then Exit Sub
+    If UBound(pt) < 2 Then Exit Sub
+
+    Dim sd As Double
+    sd = SignedPlaneDistance(planeN, planeP, pt(0), pt(1), pt(2))
+
+    If Not seen Then
+        minProj = sd
+        maxProj = sd
+        seen = True
+    Else
+        If sd < minProj Then minProj = sd
+        If sd > maxProj Then maxProj = sd
+    End If
+
+End Sub
+
+
+
+Function FormatThickness(v As Double) As String
+
+    ' Round to nearest whole millimeter, half goes up.
+    '   12.0 -> 12   12.4 -> 12   12.5 -> 13   12.9 -> 13
+
+    Dim n As Long
+
+    If v <= 0 Then
+        n = 0
+    Else
+        n = Int(v + 0.5)
+    End If
+
+    FormatThickness = CStr(n)
+
+End Function
+
+
+
