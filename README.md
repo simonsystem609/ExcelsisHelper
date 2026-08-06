@@ -1,28 +1,29 @@
 # Excelsis Helper
 
-Excelsis Helper 1.4.3-public.1 is an open-source Windows workflow companion
+Excelsis Helper 1.4.8-public.1 is an open-source Windows workflow companion
 for SOLIDWORKS. It provides recent-document access, document search,
 read-only embedded/thumbnail preview extraction, macro launching, Work Logger,
-and local MPF analysis.
+local machining guidance, and MPF analysis.
 
 ## Download
 
-- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.3-public.1/ExcelsisHelper-1.4.3-public.1-Setup.exe)
-- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.3-public.1)
-- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.3-public.1/ExcelsisHelper-1.4.3-public.1-source.zip)
+- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.8-public.1/ExcelsisHelper-1.4.8-public.1-Setup.exe)
+- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.8-public.1)
+- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.8-public.1/ExcelsisHelper-1.4.8-public.1-source.zip)
 - [SHA-256 checksums](SHA256SUMS.txt)
-- [Licensing and security audit](AUDIT-1.4.3-public.1.md)
+- [Licensing and security audit](AUDIT-1.4.8-public.1.md)
 
 The installer and application binaries are currently unsigned, so Windows may
-show a SmartScreen warning. Kaspersky 21.25 scanned the exact installer,
-unpacked application, expanded source, and source ZIP with zero detections.
-Microsoft Defender was disabled on the build host and is not claimed as
-release evidence. Verify the installer SHA-256 before running it.
+show a SmartScreen warning. Kaspersky 21.26 scanned the exact installer,
+unpacked application, compiled macros, expanded source, and source ZIP with
+zero detections or suspicions. Microsoft Defender was disabled on the build
+host and is not claimed as release evidence. Verify the installer SHA-256
+before running it.
 
 ## Source and build
 
 The exact expanded corresponding source is committed under
-[`source/ExcelsisHelper-1.4.3-public.1/`](source/ExcelsisHelper-1.4.3-public.1/).
+[`source/ExcelsisHelper-1.4.8-public.1/`](source/ExcelsisHelper-1.4.8-public.1/).
 
 On Windows with Node.js 22.12 or later:
 
@@ -33,7 +34,7 @@ npm run dist
 ```
 
 See
-[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.3-public.1/docs/BUILDING.md)
+[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.8-public.1/docs/BUILDING.md)
 for the complete non-launching build and inspection flow.
 
 ## Project links
