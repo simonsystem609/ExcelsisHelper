@@ -1,0 +1,38 @@
+{
+  "name": "excelsis-helper",
+  "version": "1.4.8",
+  "description": "SOLIDWORKS workflow helper.",
+  "author": "Excelsis contributors",
+  "license": "GPL-3.0-only",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "test": "npm run test:settings && npm run test:worklogger && npm run test:export && npm run test:gcode && npm run test:machining && npm run test:preview && npm run test:ecoqos && npm run test:hardening",
+    "test:settings": "node tools/test-settings-config.cjs && node tools/test-recent-doc-suppression.cjs",
+    "test:worklogger": "node tools/test-worklogger-unsaved.cjs && node tools/test-solidworks-watcher.cjs",
+    "test:export": "node tools/test-worklog-export.cjs",
+    "test:gcode": "node tools/test-gcode-parser.cjs",
+    "test:machining": "node tools/test-machining-engine-formulas.cjs && node tools/test-machining-engine-materials.cjs && node tools/test-machining-engine-solver.cjs && node tools/test-machining-engine-face-milling.cjs && node tools/test-machining-engine-drilling.cjs && node tools/test-machining-engine-tapping.cjs && node tools/test-machining-engine-local-analysis.cjs && node tools/test-machining-engine-mpf-writer.cjs && node tools/test-machining-engine-worker.cjs",
+    "test:preview": "node tools/test-embedded-preview.cjs && node tools/test-thumbnail-scheduler.cjs",
+    "test:ecoqos": "node tools/test-ecoqos.cjs",
+    "test:hardening": "node tools/test-release-hardening.cjs",
+    "audit:licenses": "node tools/generate-license-inventory.cjs"
+  },
+  "devDependencies": {
+    "electron": "42.8.1",
+    "electron-builder": "27.0.0-alpha.6",
+    "resedit": "^2.0.3"
+  },
+  "overrides": {
+    "ejs": "6.0.1",
+    "fast-uri@>=3 <3.1.5": "3.1.5",
+    "js-yaml": "4.3.1",
+    "undici@>=7 <7.29.0": "7.29.0"
+  },
+  "allowScripts": {
+    "electron@42.8.1": true
+  }
+}
