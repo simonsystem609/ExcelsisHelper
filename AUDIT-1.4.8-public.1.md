@@ -116,5 +116,27 @@ The packaged ASAR is `746,145` bytes with SHA-256
 
 ## Post-publication verification
 
-The exact tag target, immutable release, downloaded-back assets, Pages
-deployment, and GitHub analysis results are recorded here after publication.
+- Pull request [#1](https://github.com/simonsystem609/ExcelsisHelper/pull/1)
+  passed CodeQL and was merged normally. Release commit
+  `5998fc9c8d1a3e82aedf18c44abf2a9ed57956a1` is the exact target of annotated
+  tag `excelsis-helper-v1.4.8-public.1` (tag object
+  `5dd6c1cb8306e2585733dd559d65185969caa42c`).
+- GitHub release `366440207` is published and immutable. Its four uploaded
+  assets have the expected names, sizes, and GitHub-reported SHA-256 digests.
+  A fresh independent download matched all four staged files byte-for-byte,
+  and the downloaded checksum manifest verified all three listed artifacts.
+- GitHub's signed release attestation verifies the tag and all four asset
+  digests. `gh release verify-asset` also verified each downloaded file
+  individually against that release attestation.
+- Default-branch CodeQL run
+  [31133171764](https://github.com/simonsystem609/ExcelsisHelper/actions/runs/31133171764)
+  passed. After publication, open CodeQL, Dependabot, and secret-scanning alert
+  counts were all zero.
+- Pages deployment
+  [31133170743](https://github.com/simonsystem609/ExcelsisHelper/actions/runs/31133170743)
+  succeeded at the release commit. The live
+  [project page](https://simonsystem609.github.io/ExcelsisHelper/) returned
+  HTTP 200 and exposed the 1.4.8-public.1 release, exact installer link, audit,
+  support/development-help content, separate Excelsis3D section, and Viewer
+  cross-link. The installer URL returned HTTP 200 with content length
+  `88,810,901`.
