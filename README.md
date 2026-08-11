@@ -47,6 +47,16 @@ for the complete non-launching build and inspection flow.
 
 Please do not upload confidential customer or CAD files to public issues.
 
+## Contact
+
+For collaboration, development, or general inquiries, email
+[simonsystem609@gmail.com](mailto:simonsystem609@gmail.com).
+
+For bug reports, please use
+[GitHub Issues](https://github.com/simonsystem609/ExcelsisHelper/issues); it is
+the preferred channel for reproducible problems. Do not email credentials or
+confidential files.
+
 ## License
 
 Excelsis Helper is `GPL-3.0-only`; see [LICENSE](LICENSE). Bundled third-party
