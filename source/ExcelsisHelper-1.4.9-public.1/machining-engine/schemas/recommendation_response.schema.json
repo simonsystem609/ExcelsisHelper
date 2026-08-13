@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/machining/recommendation_response.schema.json",
+  "title": "Machining Recommendation Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "request_hash",
+    "engine_version",
+    "levels",
+    "calculations",
+    "source",
+    "risk",
+    "confidence",
+    "warnings",
+    "explanation_trace"
+  ],
+  "properties": {
+    "status": {
+      "enum": [
+        "supported",
+        "provisional",
+        "unsupported"
+      ]
+    },
+    "request_hash": {
+      "type": "string"
+    },
+    "engine_version": {
+      "type": "string"
+    },
+    "source_database_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "levels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "safe_start",
+        "target",
+        "upper_trial"
+      ],
+      "properties": {
+        "safe_start": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "rpm",
+            "feed_mm_min",
+            "fz_mm_tooth",
+            "hmax_mm"
+          ],
+          "properties": {
+            "rpm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "feed_mm_min": {
+              "type": "number",
+              "minimum": 0
+            },
+            "fz_mm_tooth": {
+              "type": "number",
+              "minimum": 0
+            },
+            "hmax_mm": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "target": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "rpm",
+            "feed_mm_min",
+            "fz_mm_tooth",
+            "hmax_mm"
+          ],
+          "properties": {
+            "rpm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "feed_mm_min": {
+              "type": "number",
+              "minimum": 0
+            },
+            "fz_mm_tooth": {
+              "type": "number",
+              "minimum": 0
+            },
+            "hmax_mm": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "upper_trial": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "rpm",
+            "feed_mm_min",
+            "fz_mm_tooth",
+            "hmax_mm"
+          ],
+          "properties": {
+            "rpm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "feed_mm_min": {
+              "type": "number",
+              "minimum": 0
+            },
+            "fz_mm_tooth": {
+              "type": "number",
+              "minimum": 0
+            },
+            "hmax_mm": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "calculations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "effective_diameter_mm",
+        "actual_vc_m_min",
+        "ap_over_d",
+        "ae_over_d",
+        "radial_chip_factor",
+        "rpm_limited"
+      ],
+      "properties": {
+        "effective_diameter_mm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "effective_diameter_range_mm": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "number",
+              "minimum": 0
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "actual_vc_m_min": {
+          "type": "number",
+          "minimum": 0
+        },
+        "active_vc_range_m_min": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "number",
+              "minimum": 0
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "ap_over_d": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ae_over_d": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "radial_chip_factor": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "axial_chip_factor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "rpm_limited": {
+          "type": "boolean"
+        },
+        "mrr_mm3_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "estimated_power_kw": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "source_envelope_match": {
+          "enum": [
+            "inside",
+            "near",
+            "outside",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "record_ids",
+        "summary"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "exact_sku",
+            "series",
+            "family",
+            "shop_validated",
+            "generic",
+            "none"
+          ]
+        },
+        "record_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "review_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "current_gcode": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rpm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "feed_mm_min": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "comparison": {
+          "enum": [
+            "below_safe",
+            "within_safe_target",
+            "between_target_and_upper",
+            "above_upper",
+            "unsupported",
+            null
+          ]
+        },
+        "feed_override_to_safe_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "feed_override_to_target_percent": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "reasons"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "reject"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "components": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "overall"
+      ],
+      "properties": {
+        "overall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "source_match": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "material_match": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "engagement_match": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "setup_match": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "hardness_match": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          }
+        }
+      }
+    },
+    "explanation_trace": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing_inputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "optimization": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidates_evaluated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates_feasible": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates_rejected": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected_safe_candidate_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected_target_candidate_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected_upper_candidate_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "debug_trace_available": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
