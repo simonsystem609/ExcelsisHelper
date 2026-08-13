@@ -1,0 +1,370 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.join(__dirname, "..");
+const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+
+const main = read("main.cjs");
+const preload = read("preload.cjs");
+const html = read("automation.html");
+const renderer = read("automation.js");
+const rendererCss = read("automation.css");
+const mpfWriter = read(path.join("machining-engine", "mpf-writer.cjs"));
+const installer = read("installer.nsh");
+const builder = read("electron-builder.yml");
+const bridge = read(path.join("scripts", "solidworks-bridge.ps1"));
+const solidWorksWatcher = read(path.join("scripts", "solidworks-watcher.vbs"));
+const docSearchWorker = read(path.join("scripts", "doc-search-worker.cjs"));
+const createCam = read(path.join("scripts", "automation-defaults", "create-cam-folder.ps1"));
+const embedded = read(path.join("scripts", "extract-embedded-preview.cjs"));
+const thumbnails = read(path.join("scripts", "extract-sw-thumbnails.ps1"));
+const thumbnailScheduler = read("thumbnail-scheduler.cjs");
+const crawlScrews = read(path.join("macros", "CrawlScrews_v1.swb"));
+const cncDxf = read(path.join("macros", "CNCDXF_v1.swb"));
+const bom = read(path.join("macros", "BOM_v19.swb"));
+const bomReadOnly = read(path.join("macros", "BOM_v19_ROfriendy.swb"));
+const radius = read(path.join("macros", "Radius_v9.swb"));
+const laserDxf = read(path.join("macros", "DXF_v16.swb"));
+const laserDxfReadOnly = read(path.join("macros", "DXF_v16_ROfriendy.swb"));
+const fuseAudit = read(path.join("tools", "audit-packaged-runtime.cjs"));
+const rendererHarnessServer = read(path.join("tools", "renderer-harness", "server.cjs"));
+const building = read(path.join("docs", "BUILDING.md"));
+const pkg = JSON.parse(read("package.json"));
+
+assert.equal((main.match(/ipcMain\.handle\(/g) || []).length, 1, "Only the trusted IPC wrapper may call ipcMain.handle directly.");
+assert.ok((main.match(/trustedIpcHandle\(/g) || []).length > 50, "All renderer IPC handlers should use the trusted wrapper.");
+assert.match(main, /frame !== sender\.mainFrame/);
+assert.match(main, /fileURLToPath\(senderUrl\)/);
+assert.doesNotMatch(main, /sandbox:\s*false/);
+assert.ok((main.match(/sandbox:\s*true/g) || []).length >= 2);
+assert.ok((main.match(/setWindowOpenHandler/g) || []).length >= 2);
+assert.ok((main.match(/will-navigate/g) || []).length >= 2);
+assert.match(main, /setPermissionRequestHandler/);
+assert.match(main, /setPermissionCheckHandler/);
+assert.match(html, /Content-Security-Policy/);
+assert.match(html, /object-src 'none'/);
+
+const htmlIds = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+assert.equal(new Set(htmlIds).size, htmlIds.length, "Renderer HTML IDs must be unique.");
+const referencedIds = [...renderer.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
+for (const id of referencedIds) assert.ok(htmlIds.includes(id), `Renderer references missing HTML ID: ${id}`);
+
+assert.match(renderer, /\.sldprt"\) return \{ key: "part", label: "PRT" \}/);
+assert.match(renderer, /\.sldasm"\) return \{ key: "assembly", label: "ASS" \}/);
+assert.match(renderer, /\.slddrw"\) return \{ key: "drawing", label: "DRW" \}/);
+assert.equal((renderer.match(/class="document-type-badge/g) || []).length, 2);
+assert.match(rendererCss, /\.document-type-badge\s*\{[\s\S]{0,100}top:\s*7px;[\s\S]{0,100}right:\s*7px;/);
+assert.match(main, /const RECENT_DOC_DEFAULT_LIST_LIMIT = 50/);
+assert.match(main, /repairRecentDocsCache\(\{ maxMissing: RECENT_DOC_REPAIR_BATCH \}\)/);
+assert.match(main, /mapWithConcurrency\(selected, 6,/);
+assert.match(main, /let recentDocsSaveChain = Promise\.resolve\(\)/);
+assert.match(main, /Number\(entry\?\.lastSeen \|\| 0\) === update\.expectedLastSeen/);
+assert.match(renderer, /showAll:\s*recentDocsState\.showAll/);
+assert.match(renderer, /RECENT_DOCS_RENDER_BATCH_SIZE = 50/);
+assert.match(html, /id="showAllRecentDocsBtn"/);
+
+assert.match(main, /fs\.realpath\(requestedMacroPath\)/);
+assert.match(main, /isInsideFolderOrEqual\(realMacroPath, realMacroRoot\)/);
+assert.match(main, /const VBA_IDENTIFIER = \/\^\[A-Za-z\]/);
+assert.match(main, /validatedVbaIdentifier\(options\.moduleName/);
+assert.match(main, /validatedVbaIdentifier\(options\.procedureName/);
+assert.match(main, /automation:open-recent-doc"[\s\S]{0,300}authorizeRecentDocumentPath/);
+assert.match(main, /automation:open-doc-search-result"[\s\S]{0,300}authorizeDocSearchDocumentPath/);
+assert.match(main, /automation:add-recent-doc"[\s\S]{0,300}authorizeDocSearchDocumentPath/);
+assert.match(main, /automation:open-containing-folder"[\s\S]{0,300}authorizeKnownDocumentPath/);
+assert.match(main, /automation:copy-document-path"[\s\S]{0,300}authorizeKnownDocumentPath/);
+assert.match(main, /automation:copy-document-path"[\s\S]{0,500}clipboard\.writeText\(documentPath\)/);
+assert.match(main, /automation:copy-document-name"[\s\S]{0,300}authorizeKnownDocumentPath/);
+assert.match(main, /automation:copy-document-name"[\s\S]{0,300}path\.basename\(displayPathOf\(authorization\.requestedPath\)\)[\s\S]{0,200}clipboard\.writeText\(documentName\)/);
+assert.match(preload, /copyDocumentPath: \(docPath\) => ipcRenderer\.invoke\("automation:copy-document-path", docPath\)/);
+assert.match(preload, /copyDocumentName: \(docPath\) => ipcRenderer\.invoke\("automation:copy-document-name", docPath\)/);
+assert.match(renderer, /async function copyPathForEntry\(entry\)/);
+assert.match(renderer, /async function copyNameForEntry\(entry\)/);
+assert.equal((renderer.match(/data-action="copy-path"/g) || []).length, 2);
+assert.equal((renderer.match(/data-action="copy-name"/g) || []).length, 2);
+assert.match(main, /isWithinApprovedDocSearchRoot/);
+assert.match(main, /automation:gcode-analyze"[\s\S]{0,500}parseAuthorizedMpfInWorker/);
+assert.match(main, /confirmGcodeHeaderCommentInclusion\(settings, analysis\.headerComments\.length\)/);
+assert.match(main, /includeHeaderComments = false/);
+assert.match(main, /escapeGcodePromptMarkdown\(path\.basename\(mpfPath\)/);
+assert.doesNotMatch(main, /Program:\s*\\`\$\{mpfPath\}\\`/);
+assert.match(main, /automation:gcode-local-analyze"[\s\S]{0,500}parseAuthorizedMpfInWorker/);
+assert.match(main, /automation:gcode-local-create-copy/);
+assert.match(main, /source\.sha256 !== sessionRecord\.sourceSha256/);
+assert.match(main, /rewriteMpfInWorker\(sessionRecord\)/);
+assert.match(main, /resourceLimits: \{ maxOldGenerationSizeMb: 384 \}/);
+assert.match(main, /app\.asar\.unpacked["'], ["']machining-engine["'], ["']mpf-analysis-worker\.cjs/);
+assert.match(main, /fs\.writeFile\(destinationPath, outputBuffer, \{ flag: "wx" \}\)/);
+assert.match(main, /fs\.writeFile\(auditPath,[\s\S]{0,100}flag: "wx"/);
+assert.match(mpfWriter, /failed structural verification/);
+assert.match(mpfWriter, /source\.slice\(start, end\) !== edit\.oldText/);
+assert.match(preload, /gcodeLocalAnalyze/);
+assert.match(preload, /gcodeLocalRecalculate/);
+assert.match(preload, /gcodeLocalCreateCopy/);
+assert.match(renderer, /function gcodeAxialDepthHint\(controls\)/);
+assert.match(renderer, /gcodeLocalControlsDirty/);
+assert.match(renderer, /Inputs changed\. Recalculate before creating the copy\./);
+assert.doesNotMatch(renderer, /defaultMillingToolType|defaultDrillToolType|\btoolTypes\b/);
+assert.doesNotMatch(html, /id="[^"]*ToolType/);
+assert.match(main, /resolveConfiguredSolidCamTarget/);
+assert.match(main, /match a registered SolidCAM add-in/);
+assert.doesNotMatch(preload, /kill-sw-orphans|killSwOrphans/);
+assert.doesNotMatch(main, /kill-sw-orphans|"kill-orphans"|sw-addin-dialog-load/);
+assert.doesNotMatch(createCam, /Stop-Process|Reconcile-SolidWorksInstances/);
+assert.match(createCam, /\$candidateSource = "configured-root-search"/);
+assert.match(main, /const LISTED_MACRO_EXTENSIONS = new Set\(\["\.swp"\]\)/);
+assert.match(cncDxf, /If selCount <> 1 Then/);
+assert.match(cncDxf, /GetCorrespondingEntity2\(assemblyFace\)/);
+assert.match(cncDxf, /BrowseForFolder\(0,/);
+assert.match(cncDxf, /ShowNamedView2 "\*Normal To", -1/);
+assert.match(cncDxf, /dataViews\(0\) = "\*Current"/);
+assert.match(cncDxf, /swExportToDWG_ExportAnnotationViews/);
+assert.match(cncDxf, /Const REG_CIRCLE_DIAMETER_MM As Double = 7#/);
+assert.match(cncDxf, /If code = 2 And UCase\$\(valLine\) = "ENTITIES" Then/);
+assert.match(cncDxf, /ElseIf codeLine = "0" And valueLine = "ENDSEC" Then/);
+assert.match(cncDxf, /If i = insertAt Then rebuilt = rebuilt & insertion/);
+assert.match(cncDxf, /pendingTempPath = BuildTemporaryDxfPath\(outPath\)/);
+assert.match(cncDxf, /ValidateStampedDxfFile\(pendingTempPath, REG_CIRCLE_DIAMETER_MM \/ 2#\)/);
+assert.match(cncDxf, /CommitTemporaryDxf\(pendingTempPath, outPath\)/);
+assert.match(cncDxf, /ReplaceFileW\(StrPtr\(finalPath\), StrPtr\(tempPath\)/);
+assert.match(cncDxf, /Const swComponentResolved As Long = 3/);
+assert.match(cncDxf, /Const swComponentFullyLightweight As Long = 4/);
+assert.match(cncDxf, /modelWindows = swFrame\.ModelWindows/);
+assert.match(cncDxf, /RestoreConfigurationChecked\(selectedOwnerForRestore, originalOwnerConfig\)/);
+assert.doesNotMatch(cncDxf, /StampRegistrationCircle\(outPath,/);
+assert.doesNotMatch(cncDxf, /DeleteExistingFile outPath/);
+assert.doesNotMatch(cncDxf, /Walk backwards from the 'E' of ENDSEC/);
+assert.doesNotMatch(cncDxf, /Function ExportFaceToDxf/);
+
+for (const source of [bom, bomReadOnly]) {
+  assert.match(source, /vComps = swAssy\.GetComponents\(False\)/);
+  assert.doesNotMatch(source, /GetComponents\(True\)/);
+  assert.match(source, /modelWindows = swFrame\.ModelWindows/);
+  assert.doesNotMatch(source, /BuildVisibleOpenPartWindowPathDict|CloseAssemblyPartDocs/);
+  assert.match(source, /CreateBomRunTempFolder\(\)/);
+  assert.match(source, /BomTempPath\(runTempFolder, "snapshot\.png"\)/);
+  assert.match(source, /If Not wb Is Nothing Then wb\.Close False/);
+  assert.match(source, /If Not xlApp Is Nothing Then xlApp\.Quit/);
+  assert.match(source, /\.NumberFormat = "@"/);
+}
+
+assert.match(radius, /modelWindows = swFrame\.ModelWindows/);
+assert.match(radius, /CBool\(swDoc\.GetSaveFlag\)/);
+assert.match(radius, /If Not ActivatePartConfig\(swPart, configName, oldConfigName\) Then/);
+assert.match(radius, /Leaving dirty or unverifiable macro window open/);
+assert.doesNotMatch(radius, /BuildVisibleOpenPartWindowPathDict|CloseAssemblyPartDocs/);
+
+assert.match(crawlScrews, /rootComps = swModel\.GetComponents\(False\)/);
+assert.doesNotMatch(crawlScrews, /GetChildren/);
+assert.match(crawlScrews, /partKey = LCase\$\(partPath\) & "\|" & LCase\$\(configName\)/);
+assert.match(crawlScrews, /SaveBMP\(bmpPath, IMG_WIDTH, IMG_HEIGHT\)/);
+assert.match(crawlScrews, /IsBmpFile\(bmpPath\)/);
+assert.match(crawlScrews, /Function WriteText\(filePath As String, content As String\) As Boolean/);
+assert.match(crawlScrews, /Set modelView\.Orientation3 = originalOrientation/);
+assert.doesNotMatch(crawlScrews, /\.png/);
+for (const source of [laserDxf, laserDxfReadOnly]) {
+  assert.doesNotMatch(source, /MessageBoxTimeout|MATERIAL_PROMPT_TIMEOUT_SEC|IDTIMEOUT/);
+  assert.match(source, /choice = MsgBox\("Material for DXF filenames defaults to "/);
+  assert.match(source, /If Not AskMaterial\(\) Then Exit Sub[\s\S]{0,3000}assemblyExportMethod = AskAssemblyExportMethod\(\)/);
+  assert.match(source, /Function AskAssemblyExportMethod\(\) As Integer/);
+  assert.match(source, /YES = Within assembly: evaluated body \+ Normal To/);
+  assert.match(source, /NO = Regular referenced part-file export/);
+  assert.match(source, /If IsAssemblyPath\(partPath\) Then/);
+  assert.match(source, /CollectSelectedSubassemblyParts partPath, cfg, assemblyCopies,\s*_\s*dictSelectedAssemblyParts/);
+  const mainBody = source.match(/Private Sub ExcelsisMacroMain\(\)[\s\S]*?\r?\nEnd Sub/)[0];
+  assert.doesNotMatch(mainBody, /BuildAssemblyPartPathDict|CloseAssemblyPartDocs/);
+  assert.match(source, /ResolveSelectedPartIfLightweight swComp/);
+  assert.match(source, /Function BuildAssemblyContextQtyDict\(swModel As Object\) As Object/);
+  assert.doesNotMatch(source, /If IsComponentLightweightSafe\(swComp\) Then GoTo NextContextQtyComponent/);
+  assert.match(source, /ComponentHasExcludedAssemblyAncestor\(swComp, False\)/);
+  assert.match(source, /GetRootComponent3\(False\)/);
+  assert.match(source, /children = parentComp\.GetChildren/);
+  assert.doesNotMatch(source, /IsComponentLightweightSafe\(childComp\)/);
+  assert.match(source, /ToolboxPartType/);
+  assert.match(source, /If IsImportedGeometryPart\(swPart\) Then/);
+  assert.match(source, /If Not isSM Then isThin = IsThinPlateLike\(swPart\)/);
+  assert.match(source, /exported = ExportOnePart\(swPart, partPath, cfg, qty, dxfFolder, mode, Nothing\)/);
+  assert.match(source, /mode As Integer, ByVal selectedFace As Object\) As Boolean/);
+  assert.match(source, /If ExportOnePart\(swPart, partPath, cfg, qty, dxfFolder, mode, selectedFace\) Then/);
+  assert.match(source, /Sheet metal keeps the proven part-file flat-pattern export/);
+  assert.match(source, /ok = ExportOnePart\(swPart, partPath, cfg, qty, dxfFolder, MODE_REGULAR, Nothing\)/);
+  assert.match(source, /ProcessSelectedSubassemblyContext/);
+  assert.match(source, /contextInfo = Array\(assemblyPath, cfg, contextCopies\)/);
+  assert.match(source, /assemblyCopies = CLng\(dictQty\(assemblyKey\)\)/);
+  assert.match(source, /candidate\(2\) = CLng\(candidate\(2\)\) \+ assemblyCopies/);
+  assert.match(source, /qty = CLng\(dictQty\(fullKey\)\) \* contextCopies/);
+  assert.match(source, /GetBodies3\(swSolidBody, bodyInfo\)/);
+  assert.match(source, /Function IsImportedAssemblyComponent\(swComp As Object\) As Boolean/);
+  assert.match(source, /importedPath = CStr\(swComp\.GetImportedPath\)/);
+  assert.match(source, /Set f = swComp\.FirstFeature/);
+  assert.match(source, /Function ComponentBodiesMayBeSheetLike\(swComp As Object\) As Boolean/);
+  assert.match(source, /If dictDone\.Exists\(fullKey\) Or dictPartExcluded\.Exists\(fullKey\) Then/);
+  assert.match(source, /Set swPart = OpenPartForExport\(partPath, dictOpened, False\)/);
+  assert.match(source, /ClosePartOpenedForCandidate partPath, swPart, dictOpened/);
+  assert.match(source, /Function ExportAssemblyContextThinSolidDxf[\s\S]{0,500}DeleteExistingFile filePath/);
+  assert.match(source, /CaptureModelSelection swAssembly, savedSelectionObjects, savedSelectionTypes/);
+  assert.match(source, /RestoreModelSelection swAssembly, savedSelectionObjects, savedSelectionTypes/);
+  assert.match(source, /faceSelected = CBool\(orientationFace\.Select4\(False, Nothing\)\)/);
+  assert.match(source, /ShowNamedView2 "\*Normal To", -1/);
+  assert.match(source, /exportOk = ExportAssemblyComponentViaTemporaryPart\(/);
+  assert.match(source, /bodyCopy\.ApplyTransform\(compTransform\)/);
+  assert.match(source, /CreateFeatureFromBody3/);
+  assert.match(source, /exportOk = ExportCurrentViewToDxf\(swTempPart, filePath\)/);
+  assert.doesNotMatch(source, /Function ExportAssemblyContextThinSolidDxf[\s\S]{0,4000}SaveDrawingAsDxf1To1/);
+  assert.match(source, /Function ActivateModelDocument\(swModel As Object\) As Boolean/);
+  assert.match(source, /ActivateDoc3\(activationName, False,/);
+  assert.match(source, /ActivateConfigurationChecked\(swPart, cfg\)/);
+  assert.equal((source.match(/\.ShowConfiguration2\(/g) || []).length, 1);
+  assert.match(source, /If exported Then dictDone\.Add fullKey, True/);
+  assert.match(source, /Function BuildVisibleDocumentWindowKeyDict\(\) As Object/);
+  assert.match(source, /modelWindows = swFrame\.ModelWindows/);
+  assert.match(source, /new model windows remaining=/);
+  assert.match(source, /CloseVisibleDocumentsOpenedByMacro dictInitiallyVisibleDocumentWindows, swModel/);
+  assert.match(source, /swApp\.CloseDoc closeName/);
+  assert.match(source, /tempPartTitle = GetDocumentActivationName\(swTempPart\)/);
+  assert.match(source, /If tempPartTitle <> "" Then swApp\.QuitDoc tempPartTitle/);
+  assert.match(source, /Set bodyCopies = Nothing/);
+  assert.match(source, /TraceRun "context progress index="/);
+  assert.match(source, /Sub RebuildDocumentIfNeeded\(swModel As Object\)[\s\S]{0,700}NeedsRebuild2[\s\S]{0,700}If rebuildStatus <> 0 Then swModel\.EditRebuild3/);
+  const fullAssemblyContextBody = source.match(/Sub ProcessFullAssemblyInContext\(swModel As Object,[\s\S]*?\r?\nEnd Sub/)[0];
+  assert.match(fullAssemblyContextBody, /RebuildDocumentIfNeeded swModel/);
+  assert.doesNotMatch(fullAssemblyContextBody, /swModel\.EditRebuild3/);
+  assert.match(source, /baseFolder = Left\(swModel\.GetPathName, InStrRev\(swModel\.GetPathName, "\\"\)\)/);
+  assert.match(source, /dxfFolder = baseFolder & "dxf\\"/);
+  assert.doesNotMatch(source, /BrowseForFolder/);
+  assert.doesNotMatch(source, /drawingTemplate|DrawingTemplate/);
+  assert.doesNotMatch(source, /REG_CIRCLE_DIAMETER_MM|InsertCircleEntity/);
+}
+assert.match(laserDxfReadOnly, /swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly,[\s\S]{0,100}cfg, errs, warns/);
+assert.match(laserDxfReadOnly, /ProcessSelectedSubassemblyContext[\s\S]{0,5000}swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly/);
+assert.equal((bridge.match(/Stop-Process/g) || []).length, 1, "Only the health-gated full-session kill may terminate SOLIDWORKS.");
+assert.match(bridge, /\$Action -eq "kill-solidworks"/);
+assert.match(bridge, /function Start-MacroRunMarker/);
+assert.match(bridge, /schema = "excelsis-helper-macro-run-v1"/);
+assert.match(bridge, /macroName = \[System\.IO\.Path\]::GetFileName\(\$MacroPath\)/);
+assert.match(bridge, /\n  Start-MacroRunMarker\r?\n[\s\S]{0,2000}\$processResult = Invoke-CscriptBridge/);
+assert.match(bridge, /finally \{\s*Stop-MacroRunMarker/);
+assert.match(main, /async function runSolidWorksMacroBridge/);
+assert.match(main, /const RETIRED_BUNDLED_MACRO_FILES = Object\.freeze\(\[/);
+for (const retiredMacro of [
+  "BOM_v19.swb",
+  "BOM_v19_ROfriendy.swb",
+  "CNCDXF_v1.swb",
+  "CrawlScrews_v1.swb",
+  "DXF_v16.swb",
+  "DXF_v16_ROfriendy.swb",
+  "Radius_v9.swb",
+  "Test1.swb",
+  "Test1.swp",
+]) {
+  assert.match(main, new RegExp(`"${retiredMacro.replaceAll(".", "\\.")}"`));
+}
+const macroRetirementBody = main.match(/async function retireObsoleteBundledMacroFiles\([\s\S]*?\n\}/)[0];
+assert.match(macroRetirementBody, /automationMacroBackupRoot\(\)[\s\S]*?"retired"/);
+assert.match(macroRetirementBody, /await fs\.rename\(sourcePath, targetPath\)/);
+assert.doesNotMatch(macroRetirementBody, /fs\.(?:rm|unlink|rmdir)/);
+assert.match(main, /const retirement = await retireObsoleteBundledMacroFiles\(root, safeVersion, stamp\)/);
+assert.match(main, /marker\?\.appVersion === appVersion && retirement\.complete/);
+assert.match(main, /retiredFiles: retirement\.files/);
+assert.match(main, /beginHelperMacroRun\(\)[\s\S]{0,200}finally \{\s*endHelperMacroRun\(\)/);
+assert.match(main, /return runSolidWorksMacroBridge\(\[/);
+assert.match(main, /if \(!existing && await isMacroRecentDocSuppressionActive\(\)\) return;/);
+assert.match(bridge, /connectionFailed = False/);
+assert.match(bridge, /connectedError = CStr\(Err\.Number\) & " " & Err\.Description/);
+assert.doesNotMatch(bridge, /Err\.Number <> 0 Or sw Is Nothing/);
+
+assert.match(embedded, /MAX_PNG_BYTES/);
+assert.match(embedded, /MAX_PIXELS/);
+assert.match(embedded, /MAX_INFLATE_ATTEMPTS/);
+assert.match(thumbnails, /MaxEmbeddedImageBytes/);
+assert.match(thumbnails, /MaxDecodedPixels/);
+assert.match(thumbnails, /MaxDxfSegments/);
+assert.match(main, /utilityProcess\.fork\(docSearchWorkerPath\(\)/);
+assert.match(main, /utilityProcess\.fork\(modulePath, args/);
+assert.match(docSearchWorker, /process\.parentPort/);
+assert.doesNotMatch(main, /ELECTRON_RUN_AS_NODE/);
+assert.doesNotMatch(main, /const \{[^\n]*\bfork\b[^\n]*\} = require\("node:child_process"\)/);
+assert.doesNotMatch(docSearchWorker, /process\.send/);
+assert.match(main, /defaults:\s*\{\s*userName:\s*worklogUserName/);
+assert.match(main, /overtime:\s*timeBucket\.overtime/);
+assert.match(main, /MIN_WORKLOG_EXPORT_ENTRY_MINUTES = 30/);
+assert.doesNotMatch(main, /splitWorklogMinutesByOvertime/);
+
+assert.doesNotMatch(installer, /\$DOCUMENTS/);
+assert.match(installer, /\$\{IfNot\} \$\{Silent\}/);
+assert.ok(installer.includes('Delete "$INSTDIR\\resources\\install-settings-preset.json"'));
+assert.ok(installer.includes('Delete "$INSTDIR\\resources\\ExcelsisHelper-settings.json"'));
+assert.ok(installer.includes('IfFileExists "$EXEDIR\\ExcelsisHelper-settings.json" 0 +2'));
+assert.ok(installer.includes('CopyFiles /SILENT "$EXEDIR\\ExcelsisHelper-settings.json" "$INSTDIR\\resources"'));
+assert.match(main, /assetPath\("ExcelsisHelper-settings\.json"\)/);
+assert.doesNotMatch(builder, /from:\s*(?:install-settings-preset|ExcelsisHelper-settings)\.json/);
+assert.match(builder, /electronLanguages:[\s\S]*en-US[\s\S]*hu/);
+assert.match(builder, /runAsNode:\s*false/);
+assert.match(builder, /enableNodeOptionsEnvironmentVariable:\s*false/);
+assert.match(builder, /enableNodeCliInspectArguments:\s*false/);
+assert.match(builder, /enableEmbeddedAsarIntegrityValidation:\s*true/);
+assert.match(builder, /onlyLoadAppFromAsar:\s*true/);
+assert.match(builder, /grantFileProtocolExtraPrivileges:\s*true/);
+assert.match(builder, /asar:\s*[\s\S]*unpack:\s*[\s\S]*machining-engine\/\*\*\/\*/);
+assert.match(builder, /from: macros[\s\S]{0,100}\*\*\/\*\.swp/);
+const scriptsResourceBlock = builder.match(/- from: scripts\s+to: scripts\s+filter:\s+((?:\s+-[^\n]+\n?)+)/)?.[0] || "";
+assert.ok(scriptsResourceBlock, "The packaged scripts allow-list is missing.");
+for (const runtimeScript of [
+  "activity-watcher.ps1",
+  "automation-defaults/_version.txt",
+  "automation-defaults/create-cam-folder.ps1",
+  "automation-defaults/README.md",
+  "doc-search-worker.cjs",
+  "extract-embedded-preview.cjs",
+  "extract-sw-thumbnails.ps1",
+  "find-sw-addins.ps1",
+  "hotkey-helper.ps1",
+  "set-ecoqos.ps1",
+  "solidworks-bridge.ps1",
+  "solidworks-watcher.vbs",
+  "sw-addin-bridge.ps1",
+  "sw-addin-status.ps1",
+]) {
+  assert.ok(scriptsResourceBlock.includes(runtimeScript), `Missing packaged runtime script: ${runtimeScript}`);
+}
+assert.doesNotMatch(scriptsResourceBlock, /\*\*/);
+assert.doesNotMatch(scriptsResourceBlock, /after-pack\.cjs/);
+assert.match(builder, /nsis:\s*[\s\S]*license:\s*LICENSE/);
+assert.match(fuseAudit, /WasmTrapHandlers/);
+assert.match(fuseAudit, /EXPECTED_FUSES = \["0", "0", "0", "0", "1", "1", "0", "1", "1"\]/);
+assert.match(main, /execArgv:\s*\["--max-old-space-size=192"\]/);
+assert.match(main, /JSON\.stringify\(\[\{ path: pair\.path, outPng: pair\.outPng \}\]\)/);
+assert.match(embedded, /MAX_BATCH_ITEMS = 1/);
+assert.match(embedded, /fs\.writeFileSync\(outPng, candidate\.png\);[\s\S]{0,80}return candidate;/);
+assert.match(thumbnailScheduler, /maxPending/);
+assert.match(thumbnailScheduler, /options\.priority - b\.options\.priority/);
+assert.match(builder, /-\s+thumbnail-scheduler\.cjs/);
+assert.match(main, /diagnostics:\s*\{\s*enabled:\s*false/);
+assert.match(main, /AUTOMATION_SETTINGS_CACHE_CHECK_MS = 30 \* 1000/);
+assert.match(solidWorksWatcher, /Const OPEN_DOCUMENTS_PER_TICK = 2/);
+assert.match(solidWorksWatcher, /Sub ContinueOpenDocumentsSample\(\)/);
+assert.doesNotMatch(solidWorksWatcher, /Do While Not candidate Is Nothing/);
+assert.match(main, /minForcedRestartGapMs:\s*60 \* 1000/);
+assert.match(main, /now - helper\.startedAt < minForcedRestartGapMs/);
+assert.match(rendererHarnessServer, /publicMessage = status === 404 \? "Not Found" : "Internal Server Error"/);
+assert.doesNotMatch(rendererHarnessServer, /response\.end\(String\(error/);
+assert.match(pkg.version, /^1\.4\.9$/);
+assert.equal(pkg.name, "excelsis-helper");
+assert.equal(pkg.devDependencies.electron, "42.9.0");
+assert.equal(pkg.devDependencies["electron-builder"], "27.0.0-alpha.6");
+assert.deepEqual(pkg.allowScripts, { "electron@42.9.0": true });
+assert.equal(pkg.overrides.ejs, "6.0.1");
+assert.equal(pkg.overrides["fast-uri@>=3 <3.1.5"], "3.1.5");
+assert.equal(pkg.overrides["undici@>=7 <7.29.0"], "7.29.0");
+assert.equal(fs.existsSync(path.join(root, ".npmrc")), false, "Public source must not ship an npm configuration file.");
+assert.match(building, /npm\.cmd ci --legacy-peer-deps/);
+
+assert.match(main, /local CAD diagnostic bundle/);
+assert.match(crawlScrews, /assistant-prompt\.txt/);
+assert.match(crawlScrews, /absolute document and/);
+assert.match(crawlScrews, /ConfirmDiagnosticCapture/);
+assert.match(crawlScrews, /vbYesNo \+ vbExclamation \+ vbDefaultButton2/);
+assert.ok(crawlScrews.indexOf("If Not ConfirmDiagnosticCapture() Then Exit Sub") < crawlScrews.indexOf("Set swApp = Application.SldWorks"));
+
+console.log("Renderer, IPC, process, installer, privacy, and thumbnail hardening tests passed.");

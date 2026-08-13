@@ -1,0 +1,1023 @@
+Option Explicit
+
+' ============================================================================
+' PDF_v1 - export existing SOLIDWORKS drawings for selected parts.
+'
+' Supported entry points:
+'   - Active part, with no selection or with one or more selected faces.
+'   - Active assembly, with one or more selected part components or their faces.
+'
+' Each drawing is opened through SOLIDWORKS' own Open Drawing command for the
+' selected model. Drawings that do not exist are skipped. All saved drawing
+' sheets are exported without changing page setup, so every sheet keeps its
+' saved portrait/landscape orientation. PDFs are written under a "pdf" folder
+' beside the active document.
+' ============================================================================
+
+Const swDocPART As Long = 1
+Const swDocASSEMBLY As Long = 2
+Const swDocDRAWING As Long = 3
+
+Const swSelFACES As Long = 2
+Const swSelCOMPONENTS As Long = 20
+
+Const swSaveAsCurrentVersion As Long = 0
+Const swSaveAsOptions_Silent As Long = 1
+Const swExportPdfData As Long = 1
+Const swExportData_ExportAllSheets As Long = 1
+Const CMD_OPEN_ASSOCIATED_DRAWING As Long = 2458
+
+Const MOVEFILE_REPLACE_EXISTING As Long = &H1
+Const MOVEFILE_WRITE_THROUGH As Long = &H8
+
+Dim swApp As Object
+
+#If VBA7 Then
+Private Declare PtrSafe Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+Private Declare PtrSafe Function ReplaceFileW Lib "kernel32" ( _
+    ByVal replacedFileName As LongPtr, ByVal replacementFileName As LongPtr, _
+    ByVal backupFileName As LongPtr, ByVal replaceFlags As Long, _
+    ByVal excludeInfo As LongPtr, ByVal reserved As LongPtr) As Long
+Private Declare PtrSafe Function MoveFileExW Lib "kernel32" ( _
+    ByVal existingFileName As LongPtr, ByVal newFileName As LongPtr, _
+    ByVal moveFlags As Long) As Long
+#Else
+Private Declare Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+Private Declare Function ReplaceFileW Lib "kernel32" ( _
+    ByVal replacedFileName As Long, ByVal replacementFileName As Long, _
+    ByVal backupFileName As Long, ByVal replaceFlags As Long, _
+    ByVal excludeInfo As Long, ByVal reserved As Long) As Long
+Private Declare Function MoveFileExW Lib "kernel32" ( _
+    ByVal existingFileName As Long, ByVal newFileName As Long, _
+    ByVal moveFlags As Long) As Long
+#End If
+
+Private gExcelsisMacroMarkerOwned As Boolean
+Private gExcelsisMacroMarkerPayload As String
+Private gTracePath As String
+
+Private Function ExcelsisMacroRoot() As String
+    ExcelsisMacroRoot = CreateObject("WScript.Shell").SpecialFolders("MyDocuments") & _
+                         "\Excelsis Helper"
+End Function
+
+Private Sub ExcelsisStartMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim root As String
+
+    On Error GoTo Failed
+    root = ExcelsisMacroRoot()
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(root) Then fso.CreateFolder root
+
+    gExcelsisMacroMarkerPayload = _
+        "{""schema"":""excelsis-helper-macro-run-v1"",""pid"":" & _
+        CStr(ExcelsisGetCurrentProcessId()) & ",""startedAt"":""" & _
+        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & _
+        """,""macroName"":""PDF_v1.swp""}"
+
+    Set markerFile = fso.CreateTextFile(root & "\macro-running.json", True, False)
+    markerFile.Write gExcelsisMacroMarkerPayload
+    markerFile.Close
+    gExcelsisMacroMarkerOwned = True
+    Exit Sub
+
+Failed:
+    gExcelsisMacroMarkerOwned = False
+End Sub
+
+Private Sub ExcelsisStopMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim markerPath As String
+    Dim currentPayload As String
+
+    If Not gExcelsisMacroMarkerOwned Then Exit Sub
+    gExcelsisMacroMarkerOwned = False
+
+    On Error GoTo Done
+    markerPath = ExcelsisMacroRoot() & "\macro-running.json"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(markerPath) Then Exit Sub
+
+    Set markerFile = fso.OpenTextFile(markerPath, 1, False)
+    currentPayload = markerFile.ReadAll
+    markerFile.Close
+    If currentPayload = gExcelsisMacroMarkerPayload Then _
+        fso.DeleteFile markerPath, True
+
+Done:
+End Sub
+
+Private Sub StartTrace()
+    Dim fileNo As Integer
+
+    On Error Resume Next
+    gTracePath = CreateObject("WScript.Shell").ExpandEnvironmentStrings( _
+        "%TEMP%\Excelsis_PDF_last_run.log")
+    fileNo = FreeFile
+    Open gTracePath For Output As #fileNo
+    Print #fileNo, "Excelsis PDF export"
+    Print #fileNo, "Started: " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    Close #fileNo
+    On Error GoTo 0
+End Sub
+
+Private Sub TraceRun(ByVal message As String)
+    Dim fileNo As Integer
+
+    Debug.Print message
+    If Len(gTracePath) = 0 Then Exit Sub
+
+    On Error Resume Next
+    fileNo = FreeFile
+    Open gTracePath For Append As #fileNo
+    Print #fileNo, Format$(Now, "hh:nn:ss") & " " & message
+    Close #fileNo
+    On Error GoTo 0
+End Sub
+
+Sub main()
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+    Dim errorHelpFile As String
+    Dim errorHelpContext As Long
+
+    On Error GoTo MacroFailed
+    ExcelsisStartMacroRunMarker
+    ExcelsisMacroMain
+    ExcelsisStopMacroRunMarker
+    Exit Sub
+
+MacroFailed:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    errorHelpFile = Err.HelpFile
+    errorHelpContext = Err.HelpContext
+
+    On Error Resume Next
+    ExcelsisStopMacroRunMarker
+    On Error GoTo 0
+
+    Err.Raise errorNumber, errorSource, errorDescription, errorHelpFile, _
+              errorHelpContext
+End Sub
+
+Private Sub ExcelsisMacroMain()
+    Dim originalDoc As Object
+    Dim partPaths As Object
+    Dim componentsByPath As Object
+    Dim outputPaths As Object
+    Dim processedDrawings As Object
+    Dim initiallyOpenDrawings As Object
+    Dim originalSelections As Collection
+    Dim outputFolder As String
+    Dim originalPath As String
+    Dim key As Variant
+    Dim partPath As String
+    Dim drawingPath As String
+    Dim outputPath As String
+    Dim detail As String
+    Dim targetComponent As Object
+    Dim drawingDoc As Object
+    Dim drawingKey As String
+    Dim openedByMacro As Boolean
+    Dim drawingMissing As Boolean
+    Dim exportedCount As Long
+    Dim missingCount As Long
+    Dim failedCount As Long
+    Dim missingNames As String
+    Dim failedNames As String
+
+    On Error GoTo RunFailed
+
+    Set swApp = Application.SldWorks
+    StartTrace
+
+    Set originalDoc = swApp.ActiveDoc
+    If originalDoc Is Nothing Then
+        MsgBox "Open a saved part or assembly first.", vbExclamation, _
+               "PDF Export"
+        TraceRun "Stopped: no active document"
+        Exit Sub
+    End If
+
+    originalPath = CStr(originalDoc.GetPathName)
+    If Len(originalPath) = 0 Then
+        MsgBox "Save the active part or assembly before exporting PDFs.", _
+               vbExclamation, "PDF Export"
+        TraceRun "Stopped: active document is unsaved"
+        Exit Sub
+    End If
+
+    If originalDoc.GetType <> swDocPART And _
+       originalDoc.GetType <> swDocASSEMBLY Then
+        MsgBox "Open a part, or select part components or faces in an assembly.", _
+               vbExclamation, "PDF Export"
+        TraceRun "Stopped: unsupported active document type"
+        Exit Sub
+    End If
+
+    Set originalSelections = New Collection
+    Set partPaths = BuildSelectedPartPathDict(originalDoc, componentsByPath, _
+                                              originalSelections)
+    If partPaths.Count = 0 Then
+        MsgBox "Select one or more part components or their faces.", _
+               vbExclamation, "PDF Export"
+        TraceRun "Stopped: no supported part selection"
+        Exit Sub
+    End If
+
+    outputFolder = PathFolder(originalPath) & "\pdf"
+    If Not EnsureFolderExists(outputFolder) Then
+        MsgBox "Could not create the PDF output folder:" & vbCrLf & _
+               outputFolder, vbCritical, "PDF Export"
+        TraceRun "Stopped: could not create output folder " & outputFolder
+        Exit Sub
+    End If
+
+    Set outputPaths = CreateObject("Scripting.Dictionary")
+    outputPaths.CompareMode = vbTextCompare
+    Set processedDrawings = CreateObject("Scripting.Dictionary")
+    processedDrawings.CompareMode = vbTextCompare
+    Set initiallyOpenDrawings = BuildOpenDrawingKeyDict()
+
+    TraceRun "Active document: " & originalPath
+    TraceRun "Selected part count: " & CStr(partPaths.Count)
+    TraceRun "Output folder: " & outputFolder
+
+    For Each key In partPaths.Keys
+        partPath = CStr(partPaths(key))
+        Set targetComponent = Nothing
+        Set drawingDoc = Nothing
+        drawingPath = ""
+        drawingKey = ""
+        openedByMacro = False
+        drawingMissing = False
+        detail = ""
+
+        If originalDoc.GetType = swDocASSEMBLY Then
+            If componentsByPath.Exists(partPath) Then _
+                Set targetComponent = componentsByPath(partPath)
+        End If
+
+        If Not OpenAssociatedDrawing(originalDoc, targetComponent, partPath, _
+                                     drawingDoc, drawingMissing, detail) Then
+            If drawingMissing Then
+                missingCount = missingCount + 1
+                missingNames = AppendName(missingNames, _
+                    PathFileNameNoExt(partPath))
+                TraceRun "Skipped, SOLIDWORKS drawing not found: " & partPath
+            Else
+                failedCount = failedCount + 1
+                failedNames = AppendName(failedNames, _
+                    PathFileNameNoExt(partPath) & " (" & detail & ")")
+                TraceRun "Failed to open assigned drawing: " & partPath & _
+                         " - " & detail
+            End If
+            GoTo FinishPart
+        End If
+
+        drawingPath = CStr(drawingDoc.GetPathName)
+        drawingKey = GetDocumentKey(drawingDoc)
+        If Len(drawingKey) > 0 Then _
+            openedByMacro = Not initiallyOpenDrawings.Exists(drawingKey)
+
+        If processedDrawings.Exists(drawingPath) Then
+            TraceRun "Skipped duplicate assigned drawing: " & drawingPath
+            GoTo FinishPart
+        End If
+        processedDrawings.Add drawingPath, True
+
+        outputPath = outputFolder & "\" & _
+                     PathFileNameNoExt(drawingPath) & ".pdf"
+
+        If outputPaths.Exists(outputPath) Then
+            failedCount = failedCount + 1
+            failedNames = AppendName(failedNames, _
+                PathFileNameNoExt(partPath) & " (duplicate output name)")
+            TraceRun "Failed, duplicate output name: " & outputPath
+            GoTo FinishPart
+        End If
+        outputPaths.Add outputPath, True
+
+        detail = ""
+        If ExportDrawingPdf(drawingDoc, outputPath, detail) Then
+            exportedCount = exportedCount + 1
+            TraceRun "Exported: " & outputPath
+        Else
+            failedCount = failedCount + 1
+            failedNames = AppendName(failedNames, _
+                PathFileNameNoExt(partPath) & " (" & detail & ")")
+            TraceRun "Failed: " & drawingPath & " - " & detail
+        End If
+
+FinishPart:
+        If openedByMacro Then CloseDrawingOpenedByMacro drawingDoc
+        ActivateModelDocument originalDoc
+NextPart:
+    Next key
+
+    RestoreOriginalSelections originalDoc, originalSelections
+
+    Dim summary As String
+    summary = "PDF export: " & CStr(exportedCount) & " exported"
+    If missingCount > 0 Then _
+        summary = summary & ", " & CStr(missingCount) & " without drawings"
+    If failedCount > 0 Then _
+        summary = summary & ", " & CStr(failedCount) & " failed"
+    summary = summary & "."
+
+    SetSolidWorksStatus summary & "  " & outputFolder
+    TraceRun summary
+
+    If missingCount > 0 Or failedCount > 0 Then
+        Dim report As String
+        report = summary & vbCrLf & vbCrLf & "Output:" & vbCrLf & outputFolder
+        If missingCount > 0 Then _
+            report = report & vbCrLf & vbCrLf & _
+                     "Skipped - SOLIDWORKS drawing not found:" & vbCrLf & _
+                     missingNames
+        If failedCount > 0 Then _
+            report = report & vbCrLf & vbCrLf & "Failed:" & vbCrLf & failedNames
+        MsgBox report, vbExclamation, "PDF Export"
+    End If
+
+    Exit Sub
+
+RunFailed:
+    Dim runError As String
+    runError = "Error " & CStr(Err.Number) & ": " & Err.Description
+    TraceRun "Stopped: " & runError
+    On Error Resume Next
+    RestoreOriginalSelections originalDoc, originalSelections
+    SetSolidWorksStatus "PDF export stopped. " & runError
+    MsgBox "PDF export stopped." & vbCrLf & runError, vbCritical, "PDF Export"
+    On Error GoTo 0
+End Sub
+
+Private Function BuildSelectedPartPathDict( _
+    ByVal activeDoc As Object, _
+    ByRef componentsByPath As Object, _
+    ByRef originalSelections As Collection) As Object
+
+    Dim paths As Object
+    Dim activePath As String
+    Dim selectionManager As Object
+    Dim selectedObject As Object
+    Dim component As Object
+    Dim selectionCount As Long
+    Dim selectionType As Long
+    Dim componentPath As String
+    Dim index As Long
+
+    Set paths = CreateObject("Scripting.Dictionary")
+    paths.CompareMode = vbTextCompare
+    Set componentsByPath = CreateObject("Scripting.Dictionary")
+    componentsByPath.CompareMode = vbTextCompare
+
+    If activeDoc Is Nothing Then
+        Set BuildSelectedPartPathDict = paths
+        Exit Function
+    End If
+
+    If activeDoc.GetType = swDocPART Then
+        Set selectionManager = activeDoc.SelectionManager
+        selectionCount = selectionManager.GetSelectedObjectCount2(-1)
+        For index = 1 To selectionCount
+            Set selectedObject = Nothing
+            On Error Resume Next
+            Set selectedObject = selectionManager.GetSelectedObject6(index, -1)
+            If Not selectedObject Is Nothing Then _
+                originalSelections.Add selectedObject
+            On Error GoTo 0
+        Next index
+
+        activePath = CStr(activeDoc.GetPathName)
+        If IsPartPath(activePath) Then paths.Add activePath, activePath
+        Set BuildSelectedPartPathDict = paths
+        Exit Function
+    End If
+
+    If activeDoc.GetType <> swDocASSEMBLY Then
+        Set BuildSelectedPartPathDict = paths
+        Exit Function
+    End If
+
+    Set selectionManager = activeDoc.SelectionManager
+    selectionCount = selectionManager.GetSelectedObjectCount2(-1)
+
+    For index = 1 To selectionCount
+        selectionType = -1
+        Set selectedObject = Nothing
+        Set component = Nothing
+
+        On Error Resume Next
+        selectionType = selectionManager.GetSelectedObjectType3(index, -1)
+        Set selectedObject = selectionManager.GetSelectedObject6(index, -1)
+        If Not selectedObject Is Nothing Then originalSelections.Add selectedObject
+        Set component = selectionManager.GetSelectedObjectsComponent4(index, -1)
+        If component Is Nothing Then _
+            Set component = selectionManager.GetSelectedObjectsComponent4(index, 0)
+        If component Is Nothing And Not selectedObject Is Nothing Then _
+            Set component = selectedObject.GetComponent
+        If component Is Nothing And selectionType = swSelCOMPONENTS Then _
+            Set component = selectedObject
+        On Error GoTo 0
+
+        If selectionType = swSelFACES Or selectionType = swSelCOMPONENTS Then
+            If Not component Is Nothing Then
+                componentPath = ""
+                On Error Resume Next
+                componentPath = CStr(component.GetPathName)
+                On Error GoTo 0
+
+                If IsPartPath(componentPath) Then
+                    If Not paths.Exists(componentPath) Then
+                        paths.Add componentPath, componentPath
+                        componentsByPath.Add componentPath, component
+                    End If
+                End If
+            End If
+        End If
+    Next index
+
+    Set BuildSelectedPartPathDict = paths
+End Function
+
+Private Function OpenAssociatedDrawing( _
+    ByVal rootDoc As Object, _
+    ByVal targetComponent As Object, _
+    ByVal partPath As String, _
+    ByRef drawingDoc As Object, _
+    ByRef drawingMissing As Boolean, _
+    ByRef detail As String) As Boolean
+
+    Dim expectedDrawingPath As String
+    Dim selectOk As Boolean
+    Dim runOk As Boolean
+
+    On Error GoTo Failed
+
+    drawingMissing = False
+    Set drawingDoc = Nothing
+
+    ' SOLIDWORKS documents Open Drawing as a same-name drawing lookup beside
+    ' the model. Check only to avoid its file-picker when no drawing exists;
+    ' SOLIDWORKS still performs the actual open and chooses the returned path.
+    expectedDrawingPath = DrawingPathForPart(partPath)
+    If Not FileExists(expectedDrawingPath) Then
+        drawingMissing = True
+        detail = "drawing not found"
+        Exit Function
+    End If
+
+    If Not ActivateModelDocument(rootDoc) Then
+        detail = "could not reactivate the source document"
+        Exit Function
+    End If
+
+    rootDoc.ClearSelection2 True
+    If rootDoc.GetType = swDocASSEMBLY Then
+        If targetComponent Is Nothing Then
+            detail = "selected component is unavailable"
+            Exit Function
+        End If
+
+        selectOk = CBool(targetComponent.Select4(False, Nothing, False))
+        If Not selectOk Then
+            detail = "could not select the component for Open Drawing"
+            Exit Function
+        End If
+    End If
+
+    runOk = CBool(swApp.RunCommand(CMD_OPEN_ASSOCIATED_DRAWING, ""))
+    If Not runOk Then
+        detail = "SOLIDWORKS Open Drawing command failed"
+        Exit Function
+    End If
+
+    Set drawingDoc = swApp.ActiveDoc
+    If drawingDoc Is Nothing Then
+        detail = "SOLIDWORKS did not return an active drawing"
+        Exit Function
+    End If
+    If drawingDoc.GetType <> swDocDRAWING Then
+        Set drawingDoc = Nothing
+        detail = "SOLIDWORKS did not open a drawing"
+        Exit Function
+    End If
+
+    TraceRun "SOLIDWORKS Open Drawing: " & partPath & " -> " & _
+             CStr(drawingDoc.GetPathName)
+    OpenAssociatedDrawing = True
+    detail = "ok"
+    Exit Function
+
+Failed:
+    detail = "error " & CStr(Err.Number) & ": " & Err.Description
+End Function
+
+Private Function ExportDrawingPdf(ByVal drawingDoc As Object, _
+                                  ByVal outputPath As String, _
+                                  ByRef detail As String) As Boolean
+    Dim pdfData As Object
+    Dim closeName As String
+    Dim saveErrors As Long
+    Dim saveWarnings As Long
+    Dim sheetsSet As Boolean
+    Dim whichSheets As Long
+    Dim saveOk As Boolean
+    Dim sheetNames As Variant
+    Dim tempPath As String
+    Dim stagingFolder As String
+
+    On Error GoTo Failed
+
+    If drawingDoc Is Nothing Then
+        detail = "assigned drawing is unavailable"
+        GoTo Cleanup
+    End If
+
+    If drawingDoc.GetType <> swDocDRAWING Then
+        detail = "assigned document is not a drawing"
+        GoTo Cleanup
+    End If
+
+    closeName = GetDocumentActivationName(drawingDoc)
+    If Not ActivateModelDocument(drawingDoc) Then
+        detail = "could not activate drawing for PDF export"
+        GoTo Cleanup
+    End If
+
+    TraceRun "Export context: " & closeName
+    Set pdfData = swApp.GetExportFileData(swExportPdfData)
+    If pdfData Is Nothing Then
+        detail = "PDF export data unavailable"
+        GoTo Cleanup
+    End If
+
+    sheetNames = drawingDoc.GetSheetNames
+    If Not IsArray(sheetNames) Then
+        detail = "drawing has no sheet-name array"
+        GoTo Cleanup
+    End If
+    TraceRun "Drawing sheets: " & JoinVariantText(sheetNames, ", ")
+
+    pdfData.ExportAs3D = False
+    pdfData.ViewPdfAfterSaving = False
+
+    ' In SOLIDWORKS 2025 SetSheets can return False when the export object is
+    ' already configured for all sheets. Verify the resulting mode and let
+    ' SaveAs report the real export result instead of treating that False as a
+    ' fatal error.
+    sheetsSet = CBool(pdfData.SetSheets(swExportData_ExportAllSheets, _
+                                        sheetNames))
+    whichSheets = CLng(pdfData.GetWhichSheets)
+    TraceRun "PDF sheet mode: " & CStr(whichSheets) & _
+             "; SetSheets returned " & CStr(sheetsSet)
+
+    tempPath = BuildTemporaryPdfPath(outputPath)
+    If Len(tempPath) = 0 Then
+        detail = "could not create PDF staging folder"
+        GoTo Cleanup
+    End If
+    stagingFolder = PathFolder(tempPath)
+
+    saveOk = CBool(drawingDoc.Extension.SaveAs(tempPath, _
+        swSaveAsCurrentVersion, swSaveAsOptions_Silent, pdfData, _
+        saveErrors, saveWarnings))
+
+    If Not saveOk Then
+        detail = "SaveAs failed, error " & CStr(saveErrors)
+        GoTo Cleanup
+    End If
+
+    If Not ValidatePdfFile(tempPath) Then
+        detail = "generated PDF validation failed"
+        GoTo Cleanup
+    End If
+
+    If Not CommitTemporaryPdf(tempPath, outputPath) Then
+        detail = "could not replace the final PDF"
+        GoTo Cleanup
+    End If
+
+    tempPath = ""
+    ExportDrawingPdf = True
+    detail = "ok"
+    GoTo Cleanup
+
+Failed:
+    detail = "error " & CStr(Err.Number) & ": " & Err.Description
+
+Cleanup:
+    On Error Resume Next
+    If Len(tempPath) > 0 Then
+        If FileExists(tempPath) Then Kill tempPath
+    End If
+    If Len(stagingFolder) > 0 Then RemoveEmptyFolder stagingFolder
+    On Error GoTo 0
+End Function
+
+Private Function BuildOpenDrawingKeyDict() As Object
+    Dim drawings As Object
+    Dim document As Object
+    Dim documentKey As String
+
+    Set drawings = CreateObject("Scripting.Dictionary")
+    drawings.CompareMode = vbTextCompare
+
+    On Error Resume Next
+    Set document = swApp.GetFirstDocument
+    Do While Not document Is Nothing
+        If document.GetType = swDocDRAWING Then
+            documentKey = GetDocumentKey(document)
+            If Len(documentKey) > 0 Then
+                If Not drawings.Exists(documentKey) Then _
+                    drawings.Add documentKey, True
+            End If
+        End If
+        Set document = document.GetNext
+    Loop
+    On Error GoTo 0
+
+    Set BuildOpenDrawingKeyDict = drawings
+End Function
+
+Private Function GetDocumentKey(ByVal document As Object) As String
+    Dim documentPath As String
+    Dim documentTitle As String
+    Dim documentType As Long
+
+    If document Is Nothing Then Exit Function
+
+    On Error Resume Next
+    documentPath = CStr(document.GetPathName)
+    documentTitle = CStr(document.GetTitle)
+    documentType = CLng(document.GetType)
+    On Error GoTo 0
+
+    If Len(documentPath) > 0 Then
+        GetDocumentKey = "path|" & CStr(documentType) & "|" & _
+                         LCase$(documentPath)
+    ElseIf Len(documentTitle) > 0 Then
+        GetDocumentKey = "title|" & CStr(documentType) & "|" & _
+                         LCase$(documentTitle)
+    End If
+End Function
+
+Private Sub CloseDrawingOpenedByMacro(ByVal drawingDoc As Object)
+    Dim dirtyKnown As Boolean
+    Dim wasDirty As Boolean
+    Dim closeName As String
+    Dim drawingPath As String
+
+    If drawingDoc Is Nothing Then Exit Sub
+
+    drawingPath = CStr(drawingDoc.GetPathName)
+    wasDirty = IsDocumentDirty(drawingDoc, dirtyKnown)
+    If dirtyKnown And wasDirty Then _
+        TraceRun "Discarding SOLIDWORKS save flag on macro-opened drawing: " & _
+                 drawingPath
+
+    On Error Resume Next
+    closeName = CStr(drawingDoc.GetTitle)
+    If Len(closeName) = 0 Then closeName = GetDocumentActivationName(drawingDoc)
+    If Len(closeName) > 0 Then
+        Err.Clear
+        swApp.CloseDoc closeName
+        If Err.Number = 0 Then
+            TraceRun "Closed macro-opened drawing without saving: " & drawingPath
+        Else
+            TraceRun "Could not close macro-opened drawing: " & drawingPath
+        End If
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Function IsDocumentDirty(ByVal document As Object, _
+                                 ByRef stateKnown As Boolean) As Boolean
+    stateKnown = False
+    If document Is Nothing Then Exit Function
+
+    On Error Resume Next
+    Err.Clear
+    IsDocumentDirty = CBool(document.GetSaveFlag)
+    stateKnown = (Err.Number = 0)
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+End Function
+
+Private Sub RestoreOriginalSelections( _
+    ByVal originalDoc As Object, _
+    ByVal originalSelections As Collection)
+
+    Dim selectedObject As Object
+    Dim selectOk As Boolean
+    Dim index As Long
+
+    If originalDoc Is Nothing Then Exit Sub
+    ActivateModelDocument originalDoc
+    originalDoc.ClearSelection2 True
+
+    If originalSelections Is Nothing Then Exit Sub
+
+    For index = 1 To originalSelections.Count
+        Set selectedObject = originalSelections(index)
+        selectOk = False
+
+        On Error Resume Next
+        Err.Clear
+        selectOk = CBool(selectedObject.Select4(True, Nothing))
+        If Not selectOk Then
+            Err.Clear
+            selectOk = CBool(selectedObject.Select4(True, Nothing, False))
+        End If
+        If Not selectOk Then
+            Err.Clear
+            selectOk = CBool(selectedObject.Select(True))
+        End If
+        On Error GoTo 0
+    Next index
+
+    TraceRun "Restored selection count: " & _
+             CStr(originalDoc.SelectionManager.GetSelectedObjectCount2(-1))
+End Sub
+
+Private Function BuildTemporaryPdfPath(ByVal finalPath As String) As String
+    Dim folder As String
+    Dim fileName As String
+    Dim token As String
+    Dim stagingFolder As String
+    Dim suffix As Long
+
+    folder = PathFolder(finalPath)
+    fileName = PathFileName(finalPath)
+    token = CStr(ExcelsisGetCurrentProcessId()) & "_" & _
+            CStr(CLng(Timer * 1000#))
+
+    stagingFolder = folder & "\.excelsis_pdf_tmp_" & token
+    Do While FolderExists(stagingFolder)
+        suffix = suffix + 1
+        stagingFolder = folder & "\.excelsis_pdf_tmp_" & token & _
+                        "_" & CStr(suffix)
+    Loop
+
+    If Not EnsureFolderExists(stagingFolder) Then Exit Function
+    BuildTemporaryPdfPath = stagingFolder & "\" & fileName
+End Function
+
+Private Function ValidatePdfFile(ByVal filePath As String) As Boolean
+    Dim fileNo As Integer
+    Dim header As String
+    Dim tailText As String
+    Dim fileLength As Long
+    Dim tailLength As Long
+
+    On Error GoTo InvalidPdf
+    If Not FileExists(filePath) Then Exit Function
+    fileLength = FileLen(filePath)
+    If fileLength < 8 Then Exit Function
+
+    header = Space$(5)
+    tailLength = 2048
+    If fileLength < tailLength Then tailLength = fileLength
+    tailText = Space$(tailLength)
+
+    fileNo = FreeFile
+    Open filePath For Binary Access Read As #fileNo
+    Get #fileNo, 1, header
+    Get #fileNo, fileLength - tailLength + 1, tailText
+    Close #fileNo
+
+    ValidatePdfFile = (header = "%PDF-" And InStr(1, tailText, "%%EOF", _
+                                                    vbBinaryCompare) > 0)
+    Exit Function
+
+InvalidPdf:
+    On Error Resume Next
+    If fileNo > 0 Then Close #fileNo
+    On Error GoTo 0
+End Function
+
+Private Function CommitTemporaryPdf(ByVal tempPath As String, _
+                                    ByVal finalPath As String) As Boolean
+    Dim apiResult As Long
+
+    If Len(tempPath) = 0 Or Len(finalPath) = 0 Then Exit Function
+    If Not FileExists(tempPath) Then Exit Function
+
+    On Error Resume Next
+    Err.Clear
+
+    If FileExists(finalPath) Then
+        apiResult = ReplaceFileW(StrPtr(finalPath), StrPtr(tempPath), 0, 0, 0, 0)
+        If apiResult = 0 Then
+            Err.Clear
+            apiResult = MoveFileExW(StrPtr(tempPath), StrPtr(finalPath), _
+                MOVEFILE_REPLACE_EXISTING Or MOVEFILE_WRITE_THROUGH)
+        End If
+    Else
+        apiResult = MoveFileExW(StrPtr(tempPath), StrPtr(finalPath), _
+            MOVEFILE_WRITE_THROUGH)
+    End If
+
+    If Err.Number <> 0 Then
+        TraceRun "PDF commit error " & CStr(Err.Number) & ": " & Err.Description
+        Err.Clear
+        apiResult = 0
+    End If
+    On Error GoTo 0
+
+    CommitTemporaryPdf = (apiResult <> 0 And FileExists(finalPath))
+End Function
+
+Private Function EnsureFolderExists(ByVal folderPath As String) As Boolean
+    Dim fso As Object
+
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(folderPath) Then fso.CreateFolder folderPath
+    EnsureFolderExists = fso.FolderExists(folderPath)
+    Exit Function
+
+Failed:
+    EnsureFolderExists = False
+End Function
+
+Private Function FileExists(ByVal filePath As String) As Boolean
+    On Error Resume Next
+    FileExists = CreateObject("Scripting.FileSystemObject").FileExists(filePath)
+    On Error GoTo 0
+End Function
+
+Private Function FolderExists(ByVal folderPath As String) As Boolean
+    On Error Resume Next
+    FolderExists = CreateObject("Scripting.FileSystemObject").FolderExists( _
+        folderPath)
+    On Error GoTo 0
+End Function
+
+Private Sub RemoveEmptyFolder(ByVal folderPath As String)
+    If Len(folderPath) = 0 Then Exit Sub
+
+    On Error Resume Next
+    RmDir folderPath
+    On Error GoTo 0
+End Sub
+
+Private Function IsPartPath(ByVal filePath As String) As Boolean
+    Dim dotPosition As Long
+
+    dotPosition = InStrRev(filePath, ".")
+    If dotPosition = 0 Then Exit Function
+    IsPartPath = (StrComp(Mid$(filePath, dotPosition), ".SLDPRT", _
+                          vbTextCompare) = 0)
+End Function
+
+Private Function DrawingPathForPart(ByVal partPath As String) As String
+    Dim dotPosition As Long
+
+    dotPosition = InStrRev(partPath, ".")
+    If dotPosition = 0 Then Exit Function
+    DrawingPathForPart = Left$(partPath, dotPosition - 1) & ".SLDDRW"
+End Function
+
+Private Function PathFolder(ByVal filePath As String) As String
+    Dim separatorPosition As Long
+
+    separatorPosition = InStrRev(filePath, "\")
+    If separatorPosition > 1 Then _
+        PathFolder = Left$(filePath, separatorPosition - 1)
+End Function
+
+Private Function PathFileName(ByVal filePath As String) As String
+    Dim separatorPosition As Long
+
+    separatorPosition = InStrRev(filePath, "\")
+    If separatorPosition = 0 Then
+        PathFileName = filePath
+    Else
+        PathFileName = Mid$(filePath, separatorPosition + 1)
+    End If
+End Function
+
+Private Function PathFileNameNoExt(ByVal filePath As String) As String
+    Dim fileName As String
+    Dim dotPosition As Long
+
+    fileName = PathFileName(filePath)
+    dotPosition = InStrRev(fileName, ".")
+    If dotPosition > 1 Then
+        PathFileNameNoExt = Left$(fileName, dotPosition - 1)
+    Else
+        PathFileNameNoExt = fileName
+    End If
+End Function
+
+Private Function AppendName(ByVal currentText As String, _
+                            ByVal newName As String) As String
+    If Len(currentText) = 0 Then
+        AppendName = "  - " & newName
+    Else
+        AppendName = currentText & vbCrLf & "  - " & newName
+    End If
+End Function
+
+Private Function JoinVariantText(ByVal values As Variant, _
+                                 ByVal separator As String) As String
+    Dim result As String
+    Dim index As Long
+
+    If Not IsArray(values) Then Exit Function
+
+    On Error GoTo Done
+    For index = LBound(values) To UBound(values)
+        If Len(result) > 0 Then result = result & separator
+        result = result & CStr(values(index))
+    Next index
+
+Done:
+    JoinVariantText = result
+End Function
+
+Private Function ModelDocumentsAreSame(ByVal leftDoc As Object, _
+                                       ByVal rightDoc As Object) As Boolean
+    Dim leftPath As String
+    Dim rightPath As String
+
+    If leftDoc Is Nothing Or rightDoc Is Nothing Then Exit Function
+
+    On Error Resume Next
+    If leftDoc Is rightDoc Then
+        ModelDocumentsAreSame = True
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    leftPath = CStr(leftDoc.GetPathName)
+    rightPath = CStr(rightDoc.GetPathName)
+    If Len(leftPath) > 0 And Len(rightPath) > 0 Then
+        ModelDocumentsAreSame = _
+            (StrComp(leftPath, rightPath, vbTextCompare) = 0)
+    Else
+        ModelDocumentsAreSame = _
+            (leftDoc.GetType = rightDoc.GetType And _
+             StrComp(leftDoc.GetTitle, rightDoc.GetTitle, vbTextCompare) = 0)
+    End If
+    On Error GoTo 0
+End Function
+
+Private Function GetDocumentActivationName(ByVal document As Object) As String
+    Dim documentPath As String
+
+    If document Is Nothing Then Exit Function
+
+    On Error Resume Next
+    documentPath = CStr(document.GetPathName)
+    On Error GoTo 0
+
+    If Len(documentPath) > 0 Then
+        GetDocumentActivationName = PathFileName(documentPath)
+    Else
+        On Error Resume Next
+        GetDocumentActivationName = CStr(document.GetTitle)
+        On Error GoTo 0
+    End If
+End Function
+
+Private Function ActivateModelDocument(ByVal document As Object) As Boolean
+    Dim activeDocument As Object
+    Dim activatedDocument As Object
+    Dim activationName As String
+    Dim activationErrors As Long
+
+    If document Is Nothing Then Exit Function
+
+    Set activeDocument = swApp.ActiveDoc
+    If ModelDocumentsAreSame(activeDocument, document) Then
+        ActivateModelDocument = True
+        Exit Function
+    End If
+
+    activationName = GetDocumentActivationName(document)
+    If Len(activationName) = 0 Then Exit Function
+
+    On Error Resume Next
+    Set activatedDocument = swApp.ActivateDoc3(activationName, False, 0, _
+                                                activationErrors)
+    On Error GoTo 0
+
+    Set activeDocument = swApp.ActiveDoc
+    ActivateModelDocument = ModelDocumentsAreSame(activeDocument, document)
+End Function
+
+Private Sub SetSolidWorksStatus(ByVal message As String)
+    On Error Resume Next
+    swApp.SetStatusBarText message
+    On Error GoTo 0
+End Sub
