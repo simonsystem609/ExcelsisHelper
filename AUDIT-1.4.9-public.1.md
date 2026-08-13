@@ -131,6 +131,37 @@ The packaged ASAR is `746,342` bytes with SHA-256
 
 ## Post-publication verification
 
-Protected-branch CI, immutable-release attestations, independent remote asset
-downloads, GitHub Pages, repository settings, and alert counts will be added
-in a follow-up audit commit after publication.
+- Protected release PR
+  [#3](https://github.com/simonsystem609/ExcelsisHelper/pull/3) merged normally
+  after CodeQL run `31751315786` passed. The release merge commit is
+  `60fbb3e5ca237d54a5ee666b670642d78ba9c915`.
+- Annotated tag `excelsis-helper-v1.4.9-public.1` is object
+  `96dfac90a36e40df8c493f36bb4846e2f04343db` and dereferences to that exact
+  merge commit. Immutable Release ID `370254012` is public, latest,
+  non-draft, and non-prerelease.
+- GitHub's signed immutable-release attestation validates Release ID
+  `370254012`, the exact tag object, and the exact names and SHA-256 digests of
+  all four assets. Every independently downloaded asset also passed
+  `gh release verify-asset`.
+- Fresh unauthenticated downloads of all four public assets matched the
+  audited staging files byte-for-byte. The downloaded checksum manifest's
+  three entries also passed. The manifest itself is `328` bytes with SHA-256
+  `F2F6FF5348D99A35344172E3E907C27B03EFDD2DD5B769C85DAC0EC8D1ACCC46`.
+- Release-main CodeQL run `31751434825` and Pages run `31751434275` passed.
+  The live HTTPS Pages site returned HTTP 200, exposes the exact 1.4.9
+  installer and release/source links, links to ExcelsisView, retains the
+  separate Excelsis3D plans/development-help section, and publishes the
+  project contact address. The repository description itself contains no
+  Excelsis3D wording.
+- The repository remains public with `main` as default. Protected `main`
+  requires a pull request and a strict successful
+  `Analyze (javascript-typescript)` check, enforces protection for admins, and
+  rejects force pushes and deletion. Actions SHA pinning is required; default
+  workflow permissions are read-only and workflows cannot approve pull
+  requests.
+- Immutable releases, private vulnerability reporting, vulnerability alerts,
+  automated security fixes, Dependabot security updates, secret scanning, and
+  push protection are enabled. Open CodeQL, Dependabot, and secret-scanning
+  alert counts were all zero after publication. The repository has no
+  webhooks, deploy keys, Actions/Dependabot/Codespaces secrets, or Actions
+  variables; the owner is the only direct collaborator.
