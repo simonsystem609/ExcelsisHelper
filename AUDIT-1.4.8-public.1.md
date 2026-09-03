@@ -1,5 +1,12 @@
 # Excelsis Helper 1.4.8-public.1 release audit
 
+Historical correction (2026-09-03): a later byte-level review found
+saved-machine paths in the metadata of all seven macro containers that this
+review missed. Version 1.4.12-public.1 neutralizes those fields without
+changing VBA or cached-code bytes. Older immutable assets and historical Git
+revisions were not rewritten. The earlier privacy conclusion below does not
+cover this metadata; see the [current audit](AUDIT-1.4.12-public.1.md).
+
 Audit date: 2026-08-07
 
 Decision: **GO for public release, with the unsigned/no-Defender caveats
