@@ -160,6 +160,32 @@ the three manifest entries, signed GitHub release/asset attestations, and the
 deployed GitHub Pages download links. These checks do not confer Authenticode
 signatures on the Windows binaries.
 
+### Completed public verification
+
+The release was published on 2026-09-03 at 12:02:55 UTC as immutable release
+ID `381984185`, through [protected PR #5](https://github.com/simonsystem609/ExcelsisHelper/pull/5).
+The release merge commit is `71e18b192563f43e3b81d7fd579c703c2e0bcdf9`;
+annotated tag object `b9d2dc5f220430e4a65ea53b750bfe66fc60c251` resolves to that
+commit. The tag, release, and source/package bytes are not changed by later
+audit-documentation commits.
+
+All four draft uploads matched their expected names, sizes, and GitHub digests.
+All four fresh unauthenticated public downloads then matched the exact hashes
+above, and all three checksum-manifest entries passed. The signed GitHub release
+attestation and each of the four individual `verify-asset` checks succeeded.
+
+Release PR CodeQL run `33752424827`, release-main CodeQL run `33752765339`, and
+release-main Pages run `33752764089` succeeded. The release-main analysis has
+zero CodeQL findings. After the new dependency graph was processed, open
+CodeQL, Dependabot, and secret-scanning alert counts were all zero. No alerts
+were dismissed to obtain that result.
+
+The live HTTPS Page and public README match the release checkout byte-for-byte.
+Page SHA-256: `7305497B57DF085F153606F1CFF99CEAB9F257F93F69AC96392183CD87F82953`.
+README SHA-256: `1622D4806992F07C01A697BD72E56C6FF86181AECA196916A0F4ABFD03855A54`.
+Exact installer/source/audit links, the Viewer cross-link, contact, support,
+and separate Excelsis3D plans/development-help section remain present.
+
 After downloading the named assets, independent verification is available with:
 
 ```powershell
