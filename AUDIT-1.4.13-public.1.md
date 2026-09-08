@@ -2,9 +2,9 @@
 
 Audit date: 2026-09-09.
 
-Decision: GO for public release with the unsigned-binary, historical-metadata,
-and installed-workflow limits below. This engineering and open-source-license
-assessment is not legal advice or a guarantee against every defect,
+Decision: Published after passing the release gates, with the unsigned-binary,
+historical-metadata and installed-workflow limits below. This engineering and
+open-source-license assessment is not legal advice or a guarantee against every defect,
 vulnerability or third-party claim.
 
 ## Intake and release preparation
@@ -153,8 +153,39 @@ four uploaded asset sizes/digests, draft downloads, fresh unauthenticated public
 downloads, checksum entries, release/asset attestations, deployed Pages links
 and current security alerts.
 
-Completed remote verification will be recorded after publication. GitHub release
-attestations do not provide Windows Authenticode signatures.
+Completed verification on 2026-09-09:
+
+- Protected [PR #7](https://github.com/simonsystem609/ExcelsisHelper/pull/7)
+  merged as `8f48d7faae2c03a03e28daa9a56148d799ceb072` after its required
+  CodeQL checks passed. No protection bypass or history rewrite was used.
+- Annotated tag `excelsis-helper-v1.4.13-public.1`, object
+  `b554d953296fa300d9fca88c2a14bc7c867681be`, resolves to that merge commit.
+  The exact `source` tree is `15fa9123bf202e03d1a232fa482b1e39ef3c20fe`.
+- Release ID `385129981` was published at `2026-09-08T23:48:39Z` and is the
+  latest immutable, non-prerelease release.
+- All four server-side asset sizes/SHA-256 digests and independent draft
+  downloads matched the frozen files before publication. Fresh unauthenticated
+  public downloads then matched all four sizes/hashes and all three checksum
+  manifest entries.
+- GitHub CLI verified the signed release attestation and each of its four
+  downloaded assets. The attestation binds the annotated tag object and exact
+  asset digests. These are not Windows Authenticode signatures.
+- Release-main
+  [CodeQL run 34291939646](https://github.com/simonsystem609/ExcelsisHelper/actions/runs/34291939646)
+  and [Pages run 34291939070](https://github.com/simonsystem609/ExcelsisHelper/actions/runs/34291939070)
+  succeeded. Main analysis `1744686029` has zero results and no error.
+  Open CodeQL, Dependabot and secret-scanning alert counts are each zero.
+- The live HTTPS page, remote README, audit and checksum manifest matched
+  repository bytes. The page retains the installer/release/source/audit links,
+  Viewer link, public contact, support and separate Excelsis3D section.
+  Page SHA-256: C923795740A887AEC89A3B88E620622DB0091942D45AE7132EE5E75509CE7A93.
+  README SHA-256: 1A6499819C35F3A9AAA18362177C84CEBAC13755F4B2669047FD2827D1D9B2BB.
+- Strict up-to-date PR checks, administrator enforcement, conversation
+  resolution, no force-push/deletion, read-only Actions defaults, full-SHA
+  action pinning and HTTPS Pages from main remain in effect.
+
+This verification-record update changes documentation only; the release tag,
+assets and corresponding source are unchanged.
 
 ## User-controlled acceptance
 

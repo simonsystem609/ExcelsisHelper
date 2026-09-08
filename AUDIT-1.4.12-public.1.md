@@ -125,11 +125,15 @@ an installed SOLIDWORKS host; that remains an explicit acceptance-test limit.
 - Gitleaks 8.30.1 found zero leaks in the final source, extracted ASAR, and
   recovered VBA source. The deeper final binary/text boundary scan examined
   209 files totaling 300,165,436 bytes with zero flagged findings.
-- Kaspersky 21.26.4.406 completed a report-only scan of the exact final installer,
+- Kaspersky 21.26.4.406 completed a scan of the exact final installer,
   source ZIP, expanded source, macros, and extracted payload on 2026-09-03,
   13:41:01-13:41:16 local time: 671 processed, 671 OK, zero detections, zero
   suspicions, zero skipped/password-protected/corrupted objects, and zero errors.
-  An antivirus scan is evidence, not a guarantee of safety.
+  Correction recorded 2026-09-09: report-only was requested, but the preserved
+  console output says the scan-action option was ignored in non-interactive
+  mode. An enforced report-only scan is therefore not claimed. The reported
+  zero-findings result is unchanged. An antivirus scan is evidence, not a
+  guarantee of safety. No historical release asset or Git history was rewritten.
 - Microsoft Defender is stopped on the build host; no independent Defender
   scan is claimed.
 
