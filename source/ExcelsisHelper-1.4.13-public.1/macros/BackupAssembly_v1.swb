@@ -1,0 +1,833 @@
+Option Explicit
+
+Private Const swDocASSEMBLY As Long = 2
+Private Const swPackAndGoFolderOptions_MinimalFolders As Long = 1
+
+Private Const swPackAndGoSaveStatus_Succeed As Long = 0
+Private Const swPackAndGoSaveStatus_UserInputNotCorrect As Long = 1
+Private Const swPackAndGoSaveStatus_FileAlreadyExist As Long = 2
+Private Const swPackAndGoSaveStatus_SaveToEmpty As Long = 3
+Private Const swPackAndGoSaveStatus_SaveError As Long = 4
+
+Private Const PACK_DOCUMENT_NORMAL As Long = 0
+Private Const PACK_DOCUMENT_VIRTUAL As Long = 1
+Private Const PACK_DOCUMENT_UNKNOWN As Long = 2
+
+Private Const MAX_REPORTED_FAILURES As Long = 6
+Private Const SAFE_OUTPUT_PATH_LENGTH As Long = 235
+
+Private swApp As SldWorks.SldWorks
+Private gBackupRunning As Boolean
+Private gBackupStage As String
+Private gBackupTracePath As String
+
+#If VBA7 Then
+Private Declare PtrSafe Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+#Else
+Private Declare Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+#End If
+
+Private gExcelsisMacroMarkerOwned As Boolean
+Private gExcelsisMacroMarkerPayload As String
+
+Private Function ExcelsisMacroRoot() As String
+    ExcelsisMacroRoot = CreateObject("WScript.Shell").SpecialFolders("MyDocuments") & "\Excelsis Helper"
+End Function
+
+Private Sub ExcelsisStartMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim root As String
+
+    On Error GoTo Failed
+    root = ExcelsisMacroRoot()
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(root) Then fso.CreateFolder root
+
+    gExcelsisMacroMarkerPayload = "{""schema"":""excelsis-helper-macro-run-v1"",""pid"":" & _
+        CStr(ExcelsisGetCurrentProcessId()) & ",""startedAt"":""" & _
+        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""BackupAssembly_v1.swp""}"
+    Set markerFile = fso.CreateTextFile(root & "\macro-running.json", True, False)
+    markerFile.Write gExcelsisMacroMarkerPayload
+    markerFile.Close
+    gExcelsisMacroMarkerOwned = True
+    Exit Sub
+
+Failed:
+    gExcelsisMacroMarkerOwned = False
+End Sub
+
+Private Sub ExcelsisStopMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim markerPath As String
+    Dim currentPayload As String
+
+    If Not gExcelsisMacroMarkerOwned Then Exit Sub
+    gExcelsisMacroMarkerOwned = False
+
+    On Error GoTo Done
+    markerPath = ExcelsisMacroRoot() & "\macro-running.json"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(markerPath) Then Exit Sub
+
+    Set markerFile = fso.OpenTextFile(markerPath, 1, False)
+    currentPayload = markerFile.ReadAll
+    markerFile.Close
+    If currentPayload = gExcelsisMacroMarkerPayload Then fso.DeleteFile markerPath, True
+
+Done:
+End Sub
+
+Public Sub main()
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+
+    If gBackupRunning Then
+        MsgBox "An assembly backup is already running.", vbExclamation, "Assembly backup"
+        Exit Sub
+    End If
+
+    gBackupRunning = True
+    On Error GoTo MacroFailed
+    InitializeBackupTrace
+    SetBackupStage "start macro marker"
+    ExcelsisStartMacroRunMarker
+    SetBackupStage "run assembly backup"
+    BackupAssemblyMain
+    SetBackupStage "stop macro marker"
+    ExcelsisStopMacroRunMarker
+    BackupTrace "DONE"
+    Set swApp = Nothing
+    gBackupRunning = False
+    Exit Sub
+
+MacroFailed:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    BackupTrace "ERROR " & CStr(errorNumber) & " source=" & errorSource & _
+        " description=" & errorDescription
+    On Error Resume Next
+    ExcelsisStopMacroRunMarker
+    Set swApp = Nothing
+    gBackupRunning = False
+    On Error GoTo 0
+
+    MsgBox "Assembly backup failed." & vbCrLf & vbCrLf & _
+        "Stage: " & gBackupStage & vbCrLf & _
+        "Error " & CStr(errorNumber) & ": " & errorDescription & vbCrLf & vbCrLf & _
+        "Trace: " & gBackupTracePath, _
+        vbCritical, "Assembly backup"
+End Sub
+
+Private Sub InitializeBackupTrace()
+    Dim fileNumber As Integer
+
+    On Error Resume Next
+    gBackupTracePath = Environ$("TEMP") & "\Excelsis_BackupAssembly_last_run.log"
+    fileNumber = FreeFile
+    Open gBackupTracePath For Output As #fileNumber
+    Print #fileNumber, "BackupAssembly_v1 standalone SWP"
+    Print #fileNumber, "Started=" & Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    Close #fileNumber
+    On Error GoTo 0
+End Sub
+
+Private Sub SetBackupStage(ByVal stageName As String)
+    gBackupStage = stageName
+    BackupTrace "STAGE " & stageName
+End Sub
+
+Private Sub BackupTrace(ByVal message As String)
+    Dim fileNumber As Integer
+
+    If Len(gBackupTracePath) = 0 Then Exit Sub
+    On Error Resume Next
+    fileNumber = FreeFile
+    Open gBackupTracePath For Append As #fileNumber
+    Print #fileNumber, Format$(Now, "hh:nn:ss") & " " & message
+    Close #fileNumber
+    On Error GoTo 0
+End Sub
+
+Private Sub BackupAssemblyMain()
+    Dim model As SldWorks.ModelDoc2
+    Dim modelExtension As SldWorks.ModelDocExtension
+    Dim packAndGo As SldWorks.PackAndGo
+    Dim fso As Object
+    Dim sourcePath As String
+    Dim sourceFolder As String
+    Dim backupFolder As String
+    Dim zipPath As String
+    Dim dateSuffix As String
+    Dim documentNames As Variant
+    Dim saveToNames As Variant
+    Dim documentStatuses As Variant
+    Dim saveStatuses As Variant
+    Dim haveDocumentNames As Boolean
+    Dim haveSaveDetails As Boolean
+    Dim expectedCount As Long
+    Dim expectedPhysicalCount As Long
+    Dim statusCount As Long
+    Dim successCount As Long
+    Dim failureCount As Long
+    Dim virtualCount As Long
+    Dim unknownCount As Long
+    Dim duplicateCount As Long
+    Dim staleVirtualCacheCount As Long
+    Dim emptyDestinationCount As Long
+    Dim missingSourceCount As Long
+    Dim failureDetails As String
+    Dim outputSize As Double
+
+    SetBackupStage "attach to SOLIDWORKS"
+    Set swApp = Application.SldWorks
+    SetBackupStage "read active document"
+    Set model = swApp.ActiveDoc
+
+    If model Is Nothing Then
+        MsgBox "Open a saved assembly before running this macro.", vbExclamation, "Assembly backup"
+        Exit Sub
+    End If
+
+    SetBackupStage "validate active document type"
+    If CLng(model.GetType) <> swDocASSEMBLY Then
+        MsgBox "The active document must be an assembly.", vbExclamation, "Assembly backup"
+        Exit Sub
+    End If
+
+    SetBackupStage "read active assembly path"
+    sourcePath = Trim$(CStr(model.GetPathName))
+    If Len(sourcePath) = 0 Then
+        MsgBox "Save the active assembly before creating its backup.", vbExclamation, "Assembly backup"
+        Exit Sub
+    End If
+
+    SetBackupStage "resolve assembly root"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(sourcePath) Then
+        Err.Raise vbObjectError + 2401, "BackupAssembly_v1", _
+            "The active assembly file no longer exists: " & sourcePath
+    End If
+    sourceFolder = CStr(fso.GetParentFolderName(sourcePath))
+    If Len(sourceFolder) = 0 Or Not fso.FolderExists(sourceFolder) Then
+        Err.Raise vbObjectError + 2402, "BackupAssembly_v1", _
+            "The active assembly folder could not be resolved."
+    End If
+
+    dateSuffix = "_" & Format$(Date, "yyyy.mm.dd")
+    BackupTrace "assembly=" & sourcePath
+    BackupTrace "filenameSuffix=" & dateSuffix
+
+    SetBackupStage "get model extension"
+    Set modelExtension = model.Extension
+    SetBackupStage "create Pack and Go session"
+    Set packAndGo = modelExtension.GetPackAndGo
+    If packAndGo Is Nothing Then
+        Err.Raise vbObjectError + 2403, "BackupAssembly_v1", _
+            "SOLIDWORKS did not create a Pack and Go session."
+    End If
+
+    SetBackupStage "configure Pack and Go session"
+    packAndGo.IncludeDrawings = True
+    packAndGo.IncludeSimulationResults = False
+    packAndGo.IncludeToolboxComponents = True
+    packAndGo.IncludeSuppressed = True
+    packAndGo.AddPrefix = ""
+    packAndGo.AddSuffix = dateSuffix
+    packAndGo.FlattenToSingleFolder = False
+    packAndGo.FolderStructureOption = swPackAndGoFolderOptions_MinimalFolders
+
+    SetBackupStage "read Pack and Go document list"
+    expectedCount = CLng(packAndGo.GetDocumentNamesCount)
+    haveDocumentNames = CBool(packAndGo.GetDocumentNames(documentNames))
+    If haveDocumentNames And VariantArrayItemCount(documentNames) > 0 Then
+        expectedCount = VariantArrayItemCount(documentNames)
+    End If
+    BackupTrace "documentCount=" & CStr(expectedCount) & _
+        " namesReturned=" & CStr(VariantArrayItemCount(documentNames)) & _
+        " namesAccepted=" & CStr(haveDocumentNames)
+    If expectedCount <= 0 Then
+        Err.Raise vbObjectError + 2404, "BackupAssembly_v1", _
+            "Pack and Go found no documents to back up."
+    End If
+
+    SetBackupStage "read Pack and Go document statuses"
+    haveSaveDetails = CBool(packAndGo.GetDocumentSaveToNames(saveToNames, documentStatuses))
+    virtualCount = CountDocumentStatus(documentStatuses, PACK_DOCUMENT_VIRTUAL)
+    unknownCount = CountDocumentStatus(documentStatuses, PACK_DOCUMENT_UNKNOWN)
+    duplicateCount = CountDuplicatePhysicalDocuments( _
+        documentNames, saveToNames, documentStatuses, fso)
+    staleVirtualCacheCount = CountStaleVirtualCacheReferences( _
+        documentNames, documentStatuses, fso)
+    emptyDestinationCount = CountEmptyPhysicalDestinations( _
+        documentNames, saveToNames, documentStatuses, fso)
+    missingSourceCount = CountMissingPhysicalSources( _
+        documentNames, documentStatuses, fso)
+
+    BackupTrace "saveDetailsAccepted=" & CStr(haveSaveDetails) & _
+        " saveNameCount=" & CStr(VariantArrayItemCount(saveToNames)) & _
+        " documentStatusCount=" & CStr(VariantArrayItemCount(documentStatuses)) & _
+        " virtualCount=" & CStr(virtualCount) & _
+        " staleVirtualCacheCount=" & CStr(staleVirtualCacheCount) & _
+        " unknownCount=" & CStr(unknownCount) & _
+        " duplicateCount=" & CStr(duplicateCount) & _
+        " emptyDestinationCount=" & CStr(emptyDestinationCount) & _
+        " missingSourceCount=" & CStr(missingSourceCount)
+    TraceSpecialDocuments documentNames, saveToNames, documentStatuses
+
+    SetBackupStage "create backup folder"
+    backupFolder = fso.BuildPath(sourceFolder, "backup")
+    If Not fso.FolderExists(backupFolder) Then fso.CreateFolder backupFolder
+    If Not fso.FolderExists(backupFolder) Then
+        Err.Raise vbObjectError + 2405, "BackupAssembly_v1", _
+            "The backup folder could not be created: " & backupFolder
+    End If
+
+    SetBackupStage "allocate unique ZIP path"
+    zipPath = BuildUniqueBackupZipPath(backupFolder, CStr(fso.GetBaseName(sourcePath)), fso)
+    BackupTrace "destination=" & zipPath
+
+    If Not SetPackAndGoZipDestination(packAndGo, zipPath) Then
+        Err.Raise vbObjectError + 2406, "BackupAssembly_v1", _
+            "SOLIDWORKS rejected the ZIP destination: " & zipPath
+    End If
+
+    SetBackupStage "save Pack and Go ZIP"
+    saveStatuses = modelExtension.SavePackAndGo(packAndGo)
+    SetBackupStage "inspect Pack and Go status array"
+    statusCount = SummarizePackAndGoStatuses( _
+        saveStatuses, documentNames, haveDocumentNames, _
+        successCount, failureCount, failureDetails)
+    BackupTrace "statusCount=" & CStr(statusCount) & _
+        " successCount=" & CStr(successCount) & _
+        " failureCount=" & CStr(failureCount)
+
+    expectedPhysicalCount = expectedCount
+    If haveSaveDetails And _
+        VariantArrayItemCount(documentStatuses) = expectedCount Then
+        expectedPhysicalCount = expectedCount - virtualCount - _
+            staleVirtualCacheCount - duplicateCount
+        If expectedPhysicalCount < 0 Then expectedPhysicalCount = 0
+    End If
+
+    If statusCount <> expectedCount And statusCount <> expectedPhysicalCount Then
+        AppendFailureDetail failureDetails, _
+            "Status count mismatch: expected " & CStr(expectedCount) & _
+            " listed documents or " & CStr(expectedPhysicalCount) & _
+            " physical files after virtual components, received " & _
+            CStr(statusCount) & "."
+        If emptyDestinationCount > 0 Then
+            AppendFailureDetail failureDetails, _
+                CStr(emptyDestinationCount) & _
+                " non-virtual document(s) had an empty Pack and Go destination; see the trace."
+        End If
+        If missingSourceCount > 0 Then
+            AppendFailureDetail failureDetails, _
+                CStr(missingSourceCount) & _
+                " non-virtual source file(s) were missing or unreachable; see the trace."
+        End If
+    End If
+
+    If failureCount > 0 Or Len(failureDetails) > 0 Then
+        Err.Raise vbObjectError + 2407, "BackupAssembly_v1", _
+            "The backup was not complete." & vbCrLf & _
+            "Succeeded: " & CStr(successCount) & vbCrLf & _
+            "Failed: " & CStr(failureCount) & _
+            FailureDetailBlock(failureDetails) & vbCrLf & vbCrLf & _
+            "Any partial output was left in place for inspection:" & vbCrLf & zipPath
+    End If
+
+    SetBackupStage "verify ZIP output"
+    If Not fso.FileExists(zipPath) Then
+        Err.Raise vbObjectError + 2408, "BackupAssembly_v1", _
+            "SOLIDWORKS reported success, but the ZIP file does not exist: " & zipPath
+    End If
+
+    outputSize = CDbl(fso.GetFile(zipPath).Size)
+    If outputSize <= 0# Or Not HasZipSignature(zipPath) Then
+        Err.Raise vbObjectError + 2409, "BackupAssembly_v1", _
+            "SOLIDWORKS reported success, but the output is not a valid ZIP file: " & zipPath
+    End If
+
+    SetBackupStage "complete"
+    BackupTrace "DONE sizeBytes=" & Format$(outputSize, "0")
+    MsgBox "Assembly backup complete." & vbCrLf & vbCrLf & _
+        "Packed files: " & CStr(successCount) & vbCrLf & _
+        "Virtual components kept in parent assemblies: " & CStr(virtualCount) & vbCrLf & _
+        "Stale virtual cache references skipped: " & CStr(staleVirtualCacheCount) & vbCrLf & _
+        "Repeated document references packed once: " & CStr(duplicateCount) & vbCrLf & _
+        "Filename suffix: " & dateSuffix & vbCrLf & _
+        "ZIP size: " & FormatByteCount(outputSize) & vbCrLf & vbCrLf & _
+        zipPath, _
+        vbInformation, "Assembly backup"
+
+    Set packAndGo = Nothing
+    Set modelExtension = Nothing
+    Set model = Nothing
+    Set fso = Nothing
+End Sub
+
+Private Function SetPackAndGoZipDestination( _
+    ByVal packAndGo As SldWorks.PackAndGo, _
+    ByVal zipPath As String) As Boolean
+
+    Dim accepted As Boolean
+    Dim firstError As String
+
+    SetBackupStage "set ZIP destination with SetSaveToName2"
+    On Error Resume Next
+    Err.Clear
+    accepted = CBool(packAndGo.SetSaveToName2(True, zipPath))
+    If Err.Number <> 0 Then firstError = Err.Description
+    Err.Clear
+
+    If Not accepted Then
+        SetBackupStage "set ZIP destination with SetSaveToName fallback"
+        accepted = CBool(packAndGo.SetSaveToName(True, zipPath))
+        If Err.Number <> 0 Then
+            BackupTrace "SetSaveToName fallback error=" & Err.Description
+            accepted = False
+        End If
+    End If
+    On Error GoTo 0
+
+    If Len(firstError) > 0 Then
+        BackupTrace "SetSaveToName2 error=" & firstError
+    End If
+    SetPackAndGoZipDestination = accepted
+End Function
+
+Private Function VariantArrayItemCount(ByVal values As Variant) As Long
+    If Not IsArray(values) Then Exit Function
+
+    On Error GoTo InvalidArray
+    VariantArrayItemCount = UBound(values) - LBound(values) + 1
+    Exit Function
+
+InvalidArray:
+    VariantArrayItemCount = 0
+End Function
+
+Private Function TryGetArrayText( _
+    ByVal values As Variant, _
+    ByVal zeroBasedOffset As Long, _
+    ByRef value As String) As Boolean
+
+    Dim itemIndex As Long
+
+    value = ""
+    If Not IsArray(values) Then Exit Function
+    On Error GoTo MissingValue
+    itemIndex = LBound(values) + zeroBasedOffset
+    If itemIndex > UBound(values) Then Exit Function
+    If Not IsNull(values(itemIndex)) And Not IsEmpty(values(itemIndex)) Then
+        value = CStr(values(itemIndex))
+    End If
+    TryGetArrayText = True
+    Exit Function
+
+MissingValue:
+    value = ""
+    TryGetArrayText = False
+End Function
+
+Private Function TryGetArrayLong( _
+    ByVal values As Variant, _
+    ByVal zeroBasedOffset As Long, _
+    ByRef value As Long) As Boolean
+
+    Dim itemIndex As Long
+
+    value = 0
+    If Not IsArray(values) Then Exit Function
+    On Error GoTo MissingValue
+    itemIndex = LBound(values) + zeroBasedOffset
+    If itemIndex > UBound(values) Then Exit Function
+    value = CLng(values(itemIndex))
+    TryGetArrayLong = True
+    Exit Function
+
+MissingValue:
+    value = 0
+    TryGetArrayLong = False
+End Function
+
+Private Function DocumentHasStatus( _
+    ByVal documentStatuses As Variant, _
+    ByVal zeroBasedOffset As Long, _
+    ByVal wantedStatus As Long) As Boolean
+
+    Dim documentStatus As Long
+
+    If TryGetArrayLong(documentStatuses, zeroBasedOffset, documentStatus) Then
+        DocumentHasStatus = (documentStatus = wantedStatus)
+    End If
+End Function
+
+Private Function CountDocumentStatus( _
+    ByVal documentStatuses As Variant, _
+    ByVal wantedStatus As Long) As Long
+
+    Dim itemCount As Long
+    Dim index As Long
+    Dim documentStatus As Long
+
+    itemCount = VariantArrayItemCount(documentStatuses)
+    For index = 0 To itemCount - 1
+        If TryGetArrayLong(documentStatuses, index, documentStatus) Then
+            If documentStatus = wantedStatus Then
+                CountDocumentStatus = CountDocumentStatus + 1
+            End If
+        End If
+    Next index
+End Function
+
+Private Function CountDuplicatePhysicalDocuments( _
+    ByVal documentNames As Variant, _
+    ByVal saveToNames As Variant, _
+    ByVal documentStatuses As Variant, _
+    ByVal fso As Object) As Long
+
+    Dim seen As Object
+    Dim itemCount As Long
+    Dim index As Long
+    Dim source As String
+    Dim saveTo As String
+    Dim identity As String
+
+    Set seen = CreateObject("Scripting.Dictionary")
+    seen.CompareMode = 1
+    itemCount = VariantArrayItemCount(documentNames)
+    If VariantArrayItemCount(saveToNames) > itemCount Then
+        itemCount = VariantArrayItemCount(saveToNames)
+    End If
+
+    For index = 0 To itemCount - 1
+        TryGetArrayText documentNames, index, source
+        If Not DocumentHasStatus(documentStatuses, index, PACK_DOCUMENT_VIRTUAL) And _
+            Not IsStaleVirtualCacheReference(source, fso) Then
+            TryGetArrayText saveToNames, index, saveTo
+            identity = Trim$(saveTo)
+            If Len(identity) = 0 Then identity = Trim$(source)
+            identity = Replace(identity, "/", "\")
+            If Len(identity) > 0 Then
+                If seen.Exists(identity) Then
+                    CountDuplicatePhysicalDocuments = CountDuplicatePhysicalDocuments + 1
+                    BackupTrace "DOCUMENT duplicate source=" & source & " saveTo=" & saveTo
+                Else
+                    seen.Add identity, True
+                End If
+            End If
+        End If
+    Next index
+End Function
+
+Private Function CountEmptyPhysicalDestinations( _
+    ByVal documentNames As Variant, _
+    ByVal saveToNames As Variant, _
+    ByVal documentStatuses As Variant, _
+    ByVal fso As Object) As Long
+
+    Dim itemCount As Long
+    Dim index As Long
+    Dim source As String
+    Dim saveTo As String
+
+    itemCount = VariantArrayItemCount(documentNames)
+    For index = 0 To itemCount - 1
+        TryGetArrayText documentNames, index, source
+        If Not DocumentHasStatus(documentStatuses, index, PACK_DOCUMENT_VIRTUAL) And _
+            Not IsStaleVirtualCacheReference(source, fso) Then
+            TryGetArrayText saveToNames, index, saveTo
+            If Len(Trim$(saveTo)) = 0 Then
+                CountEmptyPhysicalDestinations = CountEmptyPhysicalDestinations + 1
+                BackupTrace "DOCUMENT empty-destination source=" & source
+            End If
+        End If
+    Next index
+End Function
+
+Private Function CountStaleVirtualCacheReferences( _
+    ByVal documentNames As Variant, _
+    ByVal documentStatuses As Variant, _
+    ByVal fso As Object) As Long
+
+    Dim itemCount As Long
+    Dim index As Long
+    Dim source As String
+
+    itemCount = VariantArrayItemCount(documentNames)
+    For index = 0 To itemCount - 1
+        If Not DocumentHasStatus(documentStatuses, index, PACK_DOCUMENT_VIRTUAL) Then
+            TryGetArrayText documentNames, index, source
+            If IsStaleVirtualCacheReference(source, fso) Then
+                CountStaleVirtualCacheReferences = CountStaleVirtualCacheReferences + 1
+                BackupTrace "DOCUMENT stale-virtual-cache source=" & source
+            End If
+        End If
+    Next index
+End Function
+
+Private Function CountMissingPhysicalSources( _
+    ByVal documentNames As Variant, _
+    ByVal documentStatuses As Variant, _
+    ByVal fso As Object) As Long
+
+    Dim itemCount As Long
+    Dim index As Long
+    Dim source As String
+
+    itemCount = VariantArrayItemCount(documentNames)
+    For index = 0 To itemCount - 1
+        If Not DocumentHasStatus(documentStatuses, index, PACK_DOCUMENT_VIRTUAL) Then
+            TryGetArrayText documentNames, index, source
+            If Not IsStaleVirtualCacheReference(source, fso) Then
+                If Len(Trim$(source)) = 0 Or Not fso.FileExists(source) Then
+                    CountMissingPhysicalSources = CountMissingPhysicalSources + 1
+                    BackupTrace "DOCUMENT missing-source source=" & source
+                End If
+            End If
+        End If
+    Next index
+End Function
+
+Private Function IsStaleVirtualCacheReference( _
+    ByVal source As String, _
+    ByVal fso As Object) As Boolean
+
+    Dim normalized As String
+    Dim fileName As String
+
+    source = Trim$(source)
+    If Len(source) = 0 Then Exit Function
+    If fso.FileExists(source) Then Exit Function
+
+    normalized = Replace(source, "/", "\")
+    fileName = CStr(fso.GetFileName(normalized))
+    IsStaleVirtualCacheReference = _
+        InStr(1, normalized, "\AppData\Local\Temp\swx", vbTextCompare) > 0 And _
+        InStr(1, normalized, "\VC~~\", vbTextCompare) > 0 And _
+        InStr(1, fileName, "^", vbBinaryCompare) > 0
+End Function
+
+Private Sub TraceSpecialDocuments( _
+    ByVal documentNames As Variant, _
+    ByVal saveToNames As Variant, _
+    ByVal documentStatuses As Variant)
+
+    Dim itemCount As Long
+    Dim index As Long
+    Dim documentStatus As Long
+    Dim statusName As String
+    Dim source As String
+    Dim saveTo As String
+
+    itemCount = VariantArrayItemCount(documentStatuses)
+    For index = 0 To itemCount - 1
+        If TryGetArrayLong(documentStatuses, index, documentStatus) Then
+            If documentStatus <> PACK_DOCUMENT_NORMAL Then
+                Select Case documentStatus
+                    Case PACK_DOCUMENT_VIRTUAL
+                        statusName = "virtual"
+                    Case PACK_DOCUMENT_UNKNOWN
+                        statusName = "unknown"
+                    Case Else
+                        statusName = "status-" & CStr(documentStatus)
+                End Select
+                TryGetArrayText documentNames, index, source
+                TryGetArrayText saveToNames, index, saveTo
+                BackupTrace "DOCUMENT " & statusName & _
+                    " source=" & source & " saveTo=" & saveTo
+            End If
+        End If
+    Next index
+End Sub
+
+Private Function BuildUniqueBackupZipPath( _
+    ByVal backupFolder As String, _
+    ByVal assemblyBaseName As String, _
+    ByVal fso As Object) As String
+
+    Dim timestampText As String
+    Dim fixedTail As String
+    Dim safeBaseName As String
+    Dim maximumBaseLength As Long
+    Dim fileStem As String
+    Dim candidate As String
+    Dim counter As Long
+
+    timestampText = Format$(Now, "yyyymmdd_hhnnss")
+    fixedTail = "_backup_" & timestampText
+    safeBaseName = assemblyBaseName
+    maximumBaseLength = SAFE_OUTPUT_PATH_LENGTH - Len(backupFolder) - Len(fixedTail) - Len("\.zip")
+
+    If maximumBaseLength < 8 Then
+        safeBaseName = "assembly"
+    ElseIf Len(safeBaseName) > maximumBaseLength Then
+        safeBaseName = Left$(safeBaseName, maximumBaseLength)
+    End If
+
+    fileStem = safeBaseName & fixedTail
+    candidate = fso.BuildPath(backupFolder, fileStem & ".zip")
+    counter = 2
+
+    Do While fso.FileExists(candidate) Or fso.FolderExists(candidate)
+        candidate = fso.BuildPath(backupFolder, fileStem & "_" & CStr(counter) & ".zip")
+        counter = counter + 1
+        If counter > 9999 Then
+            Err.Raise vbObjectError + 2410, "BackupAssembly_v1", _
+                "Could not allocate a unique backup filename."
+        End If
+    Loop
+
+    BuildUniqueBackupZipPath = candidate
+End Function
+
+Private Function SummarizePackAndGoStatuses( _
+    ByVal saveStatuses As Variant, _
+    ByVal documentNames As Variant, _
+    ByVal haveDocumentNames As Boolean, _
+    ByRef successCount As Long, _
+    ByRef failureCount As Long, _
+    ByRef failureDetails As String) As Long
+
+    Dim firstStatus As Long
+    Dim lastStatus As Long
+    Dim statusIndex As Long
+    Dim statusCode As Long
+    Dim documentName As String
+    Dim arrayCount As Long
+
+    successCount = 0
+    failureCount = 0
+    failureDetails = ""
+
+    arrayCount = VariantArrayItemCount(saveStatuses)
+    If arrayCount > 0 Then
+        firstStatus = LBound(saveStatuses)
+        lastStatus = UBound(saveStatuses)
+        For statusIndex = firstStatus To lastStatus
+            statusCode = CLng(saveStatuses(statusIndex))
+            documentName = DocumentNameForStatus( _
+                documentNames, haveDocumentNames, statusIndex - firstStatus)
+            RecordPackAndGoStatus statusCode, documentName, _
+                successCount, failureCount, failureDetails
+        Next statusIndex
+        SummarizePackAndGoStatuses = lastStatus - firstStatus + 1
+        Exit Function
+    End If
+
+    If IsEmpty(saveStatuses) Or IsNull(saveStatuses) Then
+        failureCount = 1
+        AppendFailureDetail failureDetails, _
+            "SOLIDWORKS returned no Pack and Go status array."
+        Exit Function
+    End If
+
+    statusCode = CLng(saveStatuses)
+    documentName = DocumentNameForStatus(documentNames, haveDocumentNames, 0)
+    RecordPackAndGoStatus statusCode, documentName, _
+        successCount, failureCount, failureDetails
+    SummarizePackAndGoStatuses = 1
+End Function
+
+Private Sub RecordPackAndGoStatus( _
+    ByVal statusCode As Long, _
+    ByVal documentName As String, _
+    ByRef successCount As Long, _
+    ByRef failureCount As Long, _
+    ByRef failureDetails As String)
+
+    If statusCode = swPackAndGoSaveStatus_Succeed Then
+        successCount = successCount + 1
+        Exit Sub
+    End If
+
+    failureCount = failureCount + 1
+    If failureCount <= MAX_REPORTED_FAILURES Then
+        If Len(documentName) > 0 Then
+            AppendFailureDetail failureDetails, _
+                PackAndGoStatusText(statusCode) & ": " & documentName
+        Else
+            AppendFailureDetail failureDetails, PackAndGoStatusText(statusCode)
+        End If
+    ElseIf failureCount = MAX_REPORTED_FAILURES + 1 Then
+        AppendFailureDetail failureDetails, _
+            "Additional failures were omitted from this message."
+    End If
+End Sub
+
+Private Function DocumentNameForStatus( _
+    ByVal documentNames As Variant, _
+    ByVal haveDocumentNames As Boolean, _
+    ByVal zeroBasedOffset As Long) As String
+
+    Dim result As String
+
+    If Not haveDocumentNames Then Exit Function
+    If TryGetArrayText(documentNames, zeroBasedOffset, result) Then
+        DocumentNameForStatus = result
+    End If
+End Function
+
+Private Function PackAndGoStatusText(ByVal statusCode As Long) As String
+    Select Case statusCode
+        Case swPackAndGoSaveStatus_Succeed
+            PackAndGoStatusText = "Success"
+        Case swPackAndGoSaveStatus_UserInputNotCorrect
+            PackAndGoStatusText = "SOLIDWORKS rejected the Pack and Go input"
+        Case swPackAndGoSaveStatus_FileAlreadyExist
+            PackAndGoStatusText = "A destination file already exists"
+        Case swPackAndGoSaveStatus_SaveToEmpty
+            PackAndGoStatusText = "SOLIDWORKS attempted to save an empty file"
+        Case swPackAndGoSaveStatus_SaveError
+            PackAndGoStatusText = "SOLIDWORKS save error"
+        Case Else
+            PackAndGoStatusText = "Unknown Pack and Go status " & CStr(statusCode)
+    End Select
+End Function
+
+Private Sub AppendFailureDetail(ByRef details As String, ByVal message As String)
+    If Len(details) > 0 Then details = details & vbCrLf
+    details = details & "- " & message
+End Sub
+
+Private Function FailureDetailBlock(ByVal details As String) As String
+    If Len(details) = 0 Then Exit Function
+    FailureDetailBlock = vbCrLf & vbCrLf & "Details:" & vbCrLf & details
+End Function
+
+Private Function HasZipSignature(ByVal filePath As String) As Boolean
+    Dim fileNumber As Integer
+    Dim signature As String * 2
+
+    On Error GoTo InvalidZip
+    fileNumber = FreeFile
+    Open filePath For Binary Access Read Lock Write As #fileNumber
+    Get #fileNumber, 1, signature
+    Close #fileNumber
+    HasZipSignature = (Asc(Mid$(signature, 1, 1)) = &H50 And _
+        Asc(Mid$(signature, 2, 1)) = &H4B)
+    Exit Function
+
+InvalidZip:
+    On Error Resume Next
+    If fileNumber > 0 Then Close #fileNumber
+    On Error GoTo 0
+    HasZipSignature = False
+End Function
+
+Private Function FormatByteCount(ByVal byteCount As Double) As String
+    If byteCount >= 1073741824# Then
+        FormatByteCount = Format$(byteCount / 1073741824#, "0.00") & " GB"
+    ElseIf byteCount >= 1048576# Then
+        FormatByteCount = Format$(byteCount / 1048576#, "0.00") & " MB"
+    ElseIf byteCount >= 1024# Then
+        FormatByteCount = Format$(byteCount / 1024#, "0.00") & " KB"
+    Else
+        FormatByteCount = Format$(byteCount, "0") & " bytes"
+    End If
+End Function

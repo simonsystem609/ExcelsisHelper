@@ -94,9 +94,9 @@ an installed SOLIDWORKS host; that remains an explicit acceptance-test limit.
   repository source and independently re-extracted ZIP match path-for-path and
   byte-for-byte.
 - Reviewed provenance and component notices remain in
-  [PROVENANCE.md](source/ExcelsisHelper-1.4.12-public.1/docs/PROVENANCE.md),
-  [THIRD_PARTY_NOTICES.md](source/ExcelsisHelper-1.4.12-public.1/THIRD_PARTY_NOTICES.md),
-  and [DEPENDENCY_LICENSES.md](source/ExcelsisHelper-1.4.12-public.1/docs/DEPENDENCY_LICENSES.md).
+  [PROVENANCE.md](https://github.com/simonsystem609/ExcelsisHelper/blob/71e18b192563f43e3b81d7fd579c703c2e0bcdf9/source/ExcelsisHelper-1.4.12-public.1/docs/PROVENANCE.md),
+  [THIRD_PARTY_NOTICES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/71e18b192563f43e3b81d7fd579c703c2e0bcdf9/source/ExcelsisHelper-1.4.12-public.1/THIRD_PARTY_NOTICES.md),
+  and [DEPENDENCY_LICENSES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/71e18b192563f43e3b81d7fd579c703c2e0bcdf9/source/ExcelsisHelper-1.4.12-public.1/docs/DEPENDENCY_LICENSES.md).
   No proprietary vendor SDK, decoder, binary, customer CAD sample, or private
   build-only tooling was found in the reviewed release tree or payload.
 - Read-only embedded preview/thumbnail extraction is retained. It does not
