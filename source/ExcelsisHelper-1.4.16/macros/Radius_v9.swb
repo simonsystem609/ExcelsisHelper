@@ -1,0 +1,1516 @@
+Option Explicit
+
+Private Const swDocPART As Long = 1
+Private Const swDocASSEMBLY As Long = 2
+Private Const swSelFACES As Long = 2
+Private Const swOpenDocOptions_Silent As Long = 1
+Private Const swSaveAsOptions_Silent As Long = 1
+
+Private Const MAX_SINGLE_TRIES As Long = 300
+Private Const EDGE_MODE_RADIUS As Long = 1
+Private Const EDGE_MODE_CHAMFER As Long = 2
+Private Const FILLET_SELECTED_EDGES_OPTIONS As Long = 130 ' Uniform radius + keep features; no propagation.
+Private Const CHAMFER_SELECTED_EDGES_OPTIONS As Long = 2 ' Keep features; no propagation.
+Private Const CHAMFER_ANGLE_DISTANCE As Long = 1
+Private Const CHAMFER_ANGLE_RADIANS As Double = 0.785398163397448
+Private Const CORNER_DIRECTION_TOLERANCE As Double = 0.000001
+Private Const CORNERS_ALL As Long = 1
+Private Const CORNERS_RIGHT_ANGLE As Long = 2
+Private Const RIGHT_ANGLE_DOT_TOLERANCE As Double = 0.0017453283658983 ' 0.1 degree tolerance.
+
+Private swApp As Object
+
+#If VBA7 Then
+Private Declare PtrSafe Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+#Else
+Private Declare Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
+#End If
+
+Private gExcelsisMacroMarkerOwned As Boolean
+Private gExcelsisMacroMarkerPayload As String
+
+Private Function ExcelsisMacroRoot() As String
+    ExcelsisMacroRoot = CreateObject("WScript.Shell").SpecialFolders("MyDocuments") & "\Excelsis Helper"
+End Function
+
+Private Sub ExcelsisStartMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim root As String
+    On Error GoTo Failed
+    root = ExcelsisMacroRoot()
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(root) Then fso.CreateFolder root
+    gExcelsisMacroMarkerPayload = "{""schema"":""excelsis-helper-macro-run-v1"",""pid"":" & _
+        CStr(ExcelsisGetCurrentProcessId()) & ",""startedAt"":""" & _
+        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""Radius_v9.swp""}"
+    Set markerFile = fso.CreateTextFile(root & "\macro-running.json", True, False)
+    markerFile.Write gExcelsisMacroMarkerPayload
+    markerFile.Close
+    gExcelsisMacroMarkerOwned = True
+    Exit Sub
+Failed:
+    gExcelsisMacroMarkerOwned = False
+End Sub
+
+Private Sub ExcelsisStopMacroRunMarker()
+    Dim fso As Object
+    Dim markerFile As Object
+    Dim markerPath As String
+    Dim currentPayload As String
+    If Not gExcelsisMacroMarkerOwned Then Exit Sub
+    gExcelsisMacroMarkerOwned = False
+    On Error GoTo Done
+    markerPath = ExcelsisMacroRoot() & "\macro-running.json"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(markerPath) Then Exit Sub
+    Set markerFile = fso.OpenTextFile(markerPath, 1, False)
+    currentPayload = markerFile.ReadAll
+    markerFile.Close
+    If currentPayload = gExcelsisMacroMarkerPayload Then fso.DeleteFile markerPath, True
+Done:
+End Sub
+
+Public Sub main()
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+    Dim errorHelpFile As String
+    Dim errorHelpContext As Long
+    On Error GoTo MacroFailed
+    ExcelsisStartMacroRunMarker
+    ExcelsisMacroMain
+    ExcelsisStopMacroRunMarker
+    Exit Sub
+MacroFailed:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    errorHelpFile = Err.HelpFile
+    errorHelpContext = Err.HelpContext
+    On Error Resume Next
+    ExcelsisStopMacroRunMarker
+    On Error GoTo 0
+    Err.Raise errorNumber, errorSource, errorDescription, errorHelpFile, errorHelpContext
+End Sub
+
+Private Sub ExcelsisMacroMain()
+
+    Dim dictInitiallyVisibleDocumentWindows As Object
+    Dim dictWindowsToPreserve As Object
+    Dim issues As Collection
+    Dim oldDoc As Object
+    Dim swModel As Object
+    Dim shouldShowSummary As Boolean
+    Dim failureMessage As String
+
+    On Error GoTo RadiusFailed
+
+    Set swApp = Application.SldWorks
+
+    Set swModel = swApp.ActiveDoc
+
+    If swModel Is Nothing Then
+
+        MsgBox "Select one face in a part, or one face per part in an assembly.", vbExclamation, "Auto radius / chamfer"
+
+        Exit Sub
+
+    End If
+
+    Dim selectedFaceTokens As Collection
+    Dim assemblyTargets As Object
+    Dim selectionDetails As String
+    If swModel.GetType = swDocPART Then
+        Set selectedFaceTokens = CollectSelectedFaceTokens(swModel, selectionDetails)
+        If selectedFaceTokens Is Nothing Then
+            MsgBox selectionDetails, vbExclamation, "Auto radius / chamfer"
+            Exit Sub
+        End If
+    ElseIf swModel.GetType = swDocASSEMBLY Then
+        Set assemblyTargets = CollectAssemblyFaceTargets(swModel, selectionDetails)
+        If assemblyTargets Is Nothing Then
+            MsgBox selectionDetails, vbExclamation, "Auto radius / chamfer"
+            Exit Sub
+        End If
+    Else
+        MsgBox "Select one face in a part, or one face per part in an assembly.", _
+               vbExclamation, "Auto radius / chamfer"
+        Exit Sub
+    End If
+
+    Dim operationMode As Long
+    operationMode = AskEdgeTreatmentMode()
+    If operationMode = 0 Then Exit Sub
+
+    Dim sizeMm As Double
+    sizeMm = AskEdgeSizeMm(operationMode)
+    If sizeMm <= 0# Then Exit Sub
+
+    Dim cornerScope As Long
+    cornerScope = AskCornerScope()
+    If cornerScope = 0 Then Exit Sub
+
+    Set dictInitiallyVisibleDocumentWindows = BuildVisibleDocumentWindowKeyDict()
+    If dictInitiallyVisibleDocumentWindows Is Nothing Then
+        MsgBox "Could not capture the current SOLIDWORKS document windows." & vbCrLf & _
+               "Nothing was changed so no unrelated window can be closed.", _
+               vbExclamation, "Auto radius / chamfer"
+        Exit Sub
+    End If
+
+    Set dictWindowsToPreserve = CreateObject("Scripting.Dictionary")
+    Set issues = New Collection
+
+    Debug.Print "==== AUTO RADIUS v9 ===="
+    Debug.Print "Size mm: " & FormatNumberForText(sizeMm)
+    Debug.Print "Mode: " & EdgeTreatmentName(operationMode)
+    Debug.Print "Initially visible document windows: " & dictInitiallyVisibleDocumentWindows.Count
+
+    Set oldDoc = swApp.ActiveDoc
+
+    Dim doneParts As Long
+    Dim savedParts As Long
+    Dim totalCandidates As Long
+    Dim totalEdges As Long
+    Dim skippedParts As Long
+
+    If swModel.GetType = swDocPART Then
+
+        Dim cand As Long
+        Dim made As Long
+        Dim skipReason As String
+        Dim stateWarning As String
+        If ProcessPartDocument(swModel, "", sizeMm, operationMode, cornerScope, selectedFaceTokens, cand, made, _
+                               skipReason, stateWarning) Then
+            shouldShowSummary = True
+            doneParts = 1
+            totalCandidates = cand
+            totalEdges = made
+
+            If Len(stateWarning) > 0 Then
+                AddRadiusIssue issues, stateWarning
+                PreserveModelWindow dictWindowsToPreserve, swModel
+            End If
+
+            If made > 0 And Len(stateWarning) = 0 Then
+                Dim saveDetails As String
+                If SavePartDocument(swModel, saveDetails) Then
+                    savedParts = 1
+                Else
+                    AddRadiusIssue issues, saveDetails
+                    PreserveModelWindow dictWindowsToPreserve, swModel
+                End If
+            End If
+        Else
+            shouldShowSummary = True
+            skippedParts = 1
+            AddRadiusIssue issues, skipReason
+            If Len(stateWarning) > 0 Then
+                AddRadiusIssue issues, stateWarning
+                PreserveModelWindow dictWindowsToPreserve, swModel
+            End If
+        End If
+
+    ElseIf swModel.GetType = swDocASSEMBLY Then
+
+        shouldShowSummary = ProcessAssemblyTargets(assemblyTargets, sizeMm, operationMode, cornerScope, _
+            doneParts, savedParts, skippedParts, totalCandidates, totalEdges, _
+            issues, dictWindowsToPreserve)
+
+    Else
+
+        MsgBox "Select one face in a part, or one face per part in an assembly.", vbExclamation, "Auto radius / chamfer"
+
+        GoTo RadiusCleanup
+
+    End If
+
+    GoTo RadiusCleanup
+
+RadiusFailed:
+    failureMessage = "Auto radius / chamfer failed: " & CStr(Err.Number) & " - " & Err.Description
+    Err.Clear
+
+RadiusCleanup:
+    On Error Resume Next
+    CloseVisibleDocumentsOpenedByMacro dictInitiallyVisibleDocumentWindows, oldDoc, _
+                                       dictWindowsToPreserve
+    ActivateModelDocument oldDoc
+    On Error GoTo 0
+
+    If Len(failureMessage) > 0 Then
+        MsgBox failureMessage & vbCrLf & _
+               "Any dirty result was left open for inspection.", _
+               vbExclamation, "Auto radius / chamfer"
+    ElseIf shouldShowSummary Then
+        Dim summary As String
+        summary = "Auto radius / chamfer finished." & vbCrLf & _
+                  "Parts processed: " & CStr(doneParts) & vbCrLf & _
+                  "Parts saved: " & CStr(savedParts) & vbCrLf & _
+                  "Parts skipped: " & CStr(skippedParts) & vbCrLf & _
+                  "Mode: " & EdgeTreatmentName(operationMode) & vbCrLf & _
+                  "Corner angles: " & IIf(cornerScope = CORNERS_RIGHT_ANGLE, "90 degrees only", "All") & vbCrLf & _
+                  "Candidate edges found: " & CStr(totalCandidates) & vbCrLf & _
+                  "Edges treated: " & CStr(totalEdges)
+
+        Dim issueText As String
+        issueText = RadiusIssueSummary(issues)
+        If Len(issueText) > 0 Then summary = summary & vbCrLf & vbCrLf & issueText
+        summary = summary & vbCrLf & vbCrLf & "Check the result before closing SolidWorks."
+
+        MsgBox summary, IIf(issues.Count = 0, vbInformation, vbExclamation), "Auto radius / chamfer"
+    End If
+
+End Sub
+
+Private Function AskEdgeSizeMm(operationMode As Long) As Double
+    Dim prompt As String
+    If operationMode = EDGE_MODE_CHAMFER Then
+        prompt = "Chamfer distance in mm (45 degrees):"
+    Else
+        prompt = "Radius in mm:"
+    End If
+    Dim text As String
+    text = Trim$(InputBox(prompt, "Auto radius / chamfer", "10"))
+    If Len(text) = 0 Then Exit Function
+    AskEdgeSizeMm = ParseEdgeSizeMm(text)
+    If AskEdgeSizeMm <= 0# Then
+        MsgBox "Enter a positive size in mm. Use a dot or comma for decimals.", _
+               vbExclamation, "Auto radius / chamfer"
+    End If
+End Function
+
+Private Function ParseEdgeSizeMm(text As String) As Double
+    Dim normalized As String
+    normalized = Replace(Trim$(text), ",", ".")
+    Dim expression As Object
+    Set expression = CreateObject("VBScript.RegExp")
+    expression.Pattern = "^([0-9]+(\.[0-9]+)?|\.[0-9]+)$"
+    If Not expression.Test(normalized) Then Exit Function
+    On Error GoTo InvalidSize
+    ParseEdgeSizeMm = Val(normalized)
+    If ParseEdgeSizeMm <= 0# Then ParseEdgeSizeMm = 0#
+    Exit Function
+InvalidSize:
+    ParseEdgeSizeMm = 0#
+End Function
+
+Private Function AskEdgeTreatmentMode() As Long
+    Dim result As VbMsgBoxResult
+    result = MsgBox("Treat the outer outline corners of the selected face:" & vbCrLf & vbCrLf & _
+                    "YES = Radius" & vbCrLf & _
+                    "NO = Chamfer (45 degrees)" & vbCrLf & _
+                    "CANCEL = abort", vbYesNoCancel + vbQuestion, "Radius or chamfer")
+    If result = vbYes Then
+        AskEdgeTreatmentMode = EDGE_MODE_RADIUS
+    ElseIf result = vbNo Then
+        AskEdgeTreatmentMode = EDGE_MODE_CHAMFER
+    End If
+End Function
+
+Private Function AskCornerScope() As Long
+    Dim result As VbMsgBoxResult
+    result = MsgBox("Only treat 90-degree outline corners?" & vbCrLf & vbCrLf & _
+                    "YES = 90-degree corners only" & vbCrLf & _
+                    "NO = All corner angles (default)" & vbCrLf & _
+                    "CANCEL = abort", vbYesNoCancel + vbQuestion + vbDefaultButton2, "Corner angles")
+    If result = vbYes Then
+        AskCornerScope = CORNERS_RIGHT_ANGLE
+    ElseIf result = vbNo Then
+        AskCornerScope = CORNERS_ALL
+    End If
+End Function
+
+Private Function EdgeTreatmentName(operationMode As Long) As String
+    If operationMode = EDGE_MODE_RADIUS Then
+        EdgeTreatmentName = "Radius"
+    ElseIf operationMode = EDGE_MODE_CHAMFER Then
+        EdgeTreatmentName = "Chamfer (45 degrees)"
+    Else
+        EdgeTreatmentName = "Unknown"
+    End If
+End Function
+
+Private Function ProcessAssemblyTargets(targets As Object, sizeMm As Double, _
+                                              operationMode As Long, cornerScope As Long, _
+                                              ByRef doneParts As Long, _
+                                              ByRef savedParts As Long, _
+                                              ByRef skippedParts As Long, _
+                                              ByRef totalCandidates As Long, _
+                                              ByRef totalEdges As Long, _
+                                              issues As Collection, _
+                                              dictWindowsToPreserve As Object) As Boolean
+
+    If targets Is Nothing Then Exit Function
+    If targets.Count = 0 Then Exit Function
+    Dim dict As Object
+    Set dict = targets
+
+    ProcessAssemblyTargets = True
+
+    Dim key As Variant
+
+    For Each key In dict.Keys
+
+        Dim target As Object
+
+        Set target = dict(key)
+
+        Dim pathName As String
+        Dim configName As String
+        Dim targetFaceTokens As Collection
+
+        pathName = CStr(target("path"))
+        configName = CStr(target("config"))
+        Set targetFaceTokens = target("faceTokens")
+
+        Dim swPart As Object
+        Dim openedHere As Boolean
+
+        Set swPart = GetOpenOrLoadedPart(pathName, openedHere)
+
+        If swPart Is Nothing Then
+            skippedParts = skippedParts + 1
+            AddRadiusIssue issues, pathName & " @ " & configName & _
+                           ": could not open the part"
+            GoTo NextTarget
+        End If
+
+        Dim cand As Long
+        Dim made As Long
+        Dim skipReason As String
+        Dim stateWarning As String
+
+        If ProcessPartDocument(swPart, configName, sizeMm, operationMode, cornerScope, targetFaceTokens, cand, made, _
+                               skipReason, stateWarning) Then
+            doneParts = doneParts + 1
+            totalCandidates = totalCandidates + cand
+            totalEdges = totalEdges + made
+
+            If Len(stateWarning) > 0 Then
+                AddRadiusIssue issues, stateWarning
+                PreserveModelWindow dictWindowsToPreserve, swPart
+            End If
+
+            If made > 0 And Len(stateWarning) = 0 Then
+                Dim saveDetails As String
+                If SavePartDocument(swPart, saveDetails) Then
+                    savedParts = savedParts + 1
+                Else
+                    AddRadiusIssue issues, saveDetails
+                    PreserveModelWindow dictWindowsToPreserve, swPart
+                End If
+            End If
+        Else
+            skippedParts = skippedParts + 1
+            AddRadiusIssue issues, skipReason
+            If Len(stateWarning) > 0 Then
+                AddRadiusIssue issues, stateWarning
+                PreserveModelWindow dictWindowsToPreserve, swPart
+            End If
+        End If
+
+NextTarget:
+
+    Next key
+
+End Function
+
+Private Function CollectAssemblyFaceTargets(swAssyDoc As Object, ByRef details As String) As Object
+    Set CollectAssemblyFaceTargets = Nothing
+    details = ""
+    On Error GoTo InvalidSelection
+    Dim selMgr As Object
+    Set selMgr = swAssyDoc.SelectionManager
+    If selMgr Is Nothing Then GoTo InvalidSelection
+    Dim count As Long
+    count = selMgr.GetSelectedObjectCount2(-1)
+    If count = 0 Then GoTo InvalidSelection
+    Dim targets As Object
+    Set targets = CreateObject("Scripting.Dictionary")
+    targets.CompareMode = vbTextCompare
+
+    Dim i As Long
+    For i = 1 To count
+        If selMgr.GetSelectedObjectType3(i, -1) <> swSelFACES Then GoTo InvalidSelection
+        Dim face As Object
+        Dim comp As Object
+        Dim token As Object
+        Set face = Nothing
+        Set comp = Nothing
+        Set face = selMgr.GetSelectedObject6(i, -1)
+        If face Is Nothing Then GoTo InvalidSelection
+        On Error Resume Next
+        Set comp = selMgr.GetSelectedObjectsComponent4(i, -1)
+        If comp Is Nothing Then Set comp = selMgr.GetSelectedObjectsComponent4(i, 0)
+        If comp Is Nothing Then Set comp = face.GetComponent
+        Err.Clear
+        On Error GoTo InvalidSelection
+        Set token = CreateFaceToken(swAssyDoc, face)
+        If Not AddSelectedPartTarget(targets, comp, token, details) Then Exit Function
+    Next i
+    Set CollectAssemblyFaceTargets = targets
+    Exit Function
+InvalidSelection:
+    details = "Select faces only: exactly one face per part in the assembly. Nothing was changed."
+End Function
+
+Private Function AddSelectedPartTarget(targets As Object, comp As Object, faceToken As Object, _
+                                       ByRef details As String) As Boolean
+    On Error GoTo InvalidTarget
+    If comp Is Nothing Or faceToken Is Nothing Then GoTo InvalidTarget
+    If comp.IsSuppressed Then GoTo InvalidTarget
+    Dim pathName As String
+    Dim configName As String
+    pathName = comp.GetPathName
+    configName = comp.ReferencedConfiguration
+    If Not IsPartPath(pathName) Or Len(configName) = 0 Then GoTo InvalidTarget
+
+    ' Multiple instances/configurations still edit one underlying part file.
+    Dim key As String
+    key = LCase$(pathName)
+    If targets.Exists(key) Then
+        details = "Select only one face per part file, even across repeated instances." & vbCrLf & _
+                  pathName & vbCrLf & "Nothing was changed."
+        Exit Function
+    End If
+
+    Dim target As Object
+    Dim faceTokens As Collection
+    Set target = CreateObject("Scripting.Dictionary")
+    Set faceTokens = New Collection
+    faceTokens.Add faceToken
+    target.Add "path", pathName
+    target.Add "config", configName
+    target.Add "faceTokens", faceTokens
+    targets.Add key, target
+    AddSelectedPartTarget = True
+    Exit Function
+InvalidTarget:
+    details = "Every selected face must belong to a resolved, saved part component. Nothing was changed."
+End Function
+
+Private Function CollectSelectedFaceTokens(swDoc As Object, ByRef details As String) As Collection
+    Set CollectSelectedFaceTokens = Nothing
+    details = ""
+    On Error GoTo InvalidSelection
+    If swDoc Is Nothing Then GoTo InvalidSelection
+    Dim selMgr As Object
+    Set selMgr = swDoc.SelectionManager
+    If selMgr Is Nothing Then GoTo InvalidSelection
+    If selMgr.GetSelectedObjectCount2(-1) <> 1 Then GoTo InvalidSelection
+    If selMgr.GetSelectedObjectType3(1, -1) <> swSelFACES Then GoTo InvalidSelection
+
+    Dim selectedFace As Object
+    Dim token As Object
+    Dim tokens As Collection
+    Set selectedFace = selMgr.GetSelectedObject6(1, -1)
+    Set token = CreateFaceToken(swDoc, selectedFace)
+    If token Is Nothing Then GoTo InvalidSelection
+    Set tokens = New Collection
+    tokens.Add token
+    Set CollectSelectedFaceTokens = tokens
+    Exit Function
+InvalidSelection:
+    details = "Select exactly one face in the part first. Components, edges and empty selections are not valid."
+End Function
+
+Private Function CreateFaceToken(sourceDoc As Object, sourceFace As Object) As Object
+
+    Set CreateFaceToken = Nothing
+    If sourceDoc Is Nothing Or sourceFace Is Nothing Then Exit Function
+
+    Dim token As Object
+    Set token = CreateObject("Scripting.Dictionary")
+    token.Add "sourceDoc", sourceDoc
+    token.Add "fallbackFace", sourceFace
+
+    Dim persistRef As Variant
+    persistRef = Empty
+    On Error Resume Next
+    persistRef = sourceDoc.Extension.GetPersistReference3(sourceFace)
+    Err.Clear
+    On Error GoTo 0
+    token.Add "persistRef", persistRef
+
+    Set CreateFaceToken = token
+
+End Function
+
+Private Function ResolveFaceTokenToPart(swPart As Object, token As Object) As Object
+
+    Set ResolveFaceTokenToPart = Nothing
+    If swPart Is Nothing Or token Is Nothing Then Exit Function
+
+    Dim sourceDoc As Object
+    Dim sourceFace As Object
+    Dim persistRef As Variant
+
+    On Error Resume Next
+    Set sourceDoc = token("sourceDoc")
+    Set sourceFace = token("fallbackFace")
+    persistRef = token("persistRef")
+    On Error GoTo 0
+
+    If sourceDoc Is Nothing Then Exit Function
+
+    If Not IsEmpty(persistRef) Then
+        Dim persistError As Long
+        Dim refreshedFace As Object
+
+        Set refreshedFace = Nothing
+        On Error Resume Next
+        Set refreshedFace = sourceDoc.Extension.GetObjectByPersistReference3(persistRef, persistError)
+        On Error GoTo 0
+        If Not refreshedFace Is Nothing Then Set sourceFace = refreshedFace
+    End If
+
+    If sourceFace Is Nothing Then Exit Function
+
+    If sourceDoc Is swPart Then
+        Set ResolveFaceTokenToPart = sourceFace
+    Else
+        Set ResolveFaceTokenToPart = GetCorrespondingPartFace(swPart, sourceFace)
+    End If
+
+End Function
+
+Private Function GetCorrespondingPartFace(ownerDoc As Object, assemblyFace As Object) As Object
+
+    Set GetCorrespondingPartFace = Nothing
+    If ownerDoc Is Nothing Or assemblyFace Is Nothing Then Exit Function
+
+    On Error Resume Next
+    Set GetCorrespondingPartFace = ownerDoc.Extension.GetCorrespondingEntity2(assemblyFace)
+    If GetCorrespondingPartFace Is Nothing Then
+        Err.Clear
+        Set GetCorrespondingPartFace = ownerDoc.Extension.GetCorrespondingEntity(assemblyFace)
+    End If
+    On Error GoTo 0
+
+End Function
+
+Private Function BuildPartFaceTokens(swPart As Object, sourceTokens As Collection, _
+                                     ByRef details As String) As Collection
+    Set BuildPartFaceTokens = Nothing
+    details = "Exactly one explicitly selected face is required."
+    If sourceTokens Is Nothing Then Exit Function
+    If sourceTokens.Count <> 1 Then Exit Function
+    Dim sourceToken As Object
+    Set sourceToken = sourceTokens(1)
+    Dim resolvedFace As Object
+    Set resolvedFace = ResolveFaceTokenToPart(swPart, sourceToken)
+    If resolvedFace Is Nothing Then
+        details = "The selected face could not be mapped into the part. No substitute face was used."
+        Exit Function
+    End If
+    Dim token As Object
+    Set token = CreateFaceToken(swPart, resolvedFace)
+    If token Is Nothing Then
+        details = "The selected face could not be captured in the part."
+        Exit Function
+    End If
+    Dim tokens As Collection
+    Set tokens = New Collection
+    tokens.Add token
+    details = ""
+    Set BuildPartFaceTokens = tokens
+End Function
+
+
+Private Function GetOpenOrLoadedPart(pathName As String, ByRef openedHere As Boolean) As Object
+
+    Set GetOpenOrLoadedPart = Nothing
+
+    openedHere = False
+
+    If Len(pathName) = 0 Then Exit Function
+
+    On Error Resume Next
+
+    Set GetOpenOrLoadedPart = swApp.GetOpenDocumentByName(pathName)
+
+    On Error GoTo 0
+
+    If Not GetOpenOrLoadedPart Is Nothing Then Exit Function
+
+    Dim errs As Long
+    Dim warns As Long
+
+    On Error Resume Next
+
+    Set GetOpenOrLoadedPart = swApp.OpenDoc6(pathName, swDocPART, swOpenDocOptions_Silent, "", errs, warns)
+
+    openedHere = Not GetOpenOrLoadedPart Is Nothing
+
+    On Error GoTo 0
+
+End Function
+
+Private Function SavePartDocument(swPart As Object, ByRef details As String) As Boolean
+
+    If swPart Is Nothing Then Exit Function
+
+    details = ""
+
+    Dim errs As Long
+    Dim warns As Long
+
+    On Error Resume Next
+
+    SavePartDocument = swPart.Save3(swSaveAsOptions_Silent, errs, warns)
+
+    If Err.Number <> 0 Then
+
+        Debug.Print "  Save failed: " & swPart.GetTitle & " err=" & CStr(Err.Number)
+
+        details = swPart.GetTitle & ": save failed, error " & _
+                  CStr(Err.Number) & " - " & Err.Description
+
+        Err.Clear
+
+    ElseIf Not SavePartDocument Then
+
+        Debug.Print "  Save returned False: " & swPart.GetTitle & " errs=" & CStr(errs) & " warns=" & CStr(warns)
+
+        details = swPart.GetTitle & ": Save3 returned False (errors=" & _
+                  CStr(errs) & ", warnings=" & CStr(warns) & ")"
+
+    Else
+
+        Debug.Print "  Saved: " & swPart.GetTitle
+
+    End If
+
+    On Error GoTo 0
+
+End Function
+
+Private Function ProcessPartDocument(swPart As Object, configName As String, sizeMm As Double, _
+                                     operationMode As Long, cornerScope As Long, sourceFaceTokens As Collection, _
+                                     ByRef candidateCount As Long, ByRef treatedEdges As Long, _
+                                     ByRef skipReason As String, ByRef stateWarning As String) As Boolean
+    candidateCount = 0
+    treatedEdges = 0
+    skipReason = ""
+    stateWarning = ""
+    Dim oldConfigName As String
+    Dim processingReady As Boolean
+    Dim hadUnsavedChanges As Boolean
+    On Error GoTo PartFailed
+    If swPart Is Nothing Then Exit Function
+    If swPart.GetType <> swDocPART Then Exit Function
+    If sourceFaceTokens Is Nothing Then
+        skipReason = "Exactly one explicitly selected face is required."
+        Exit Function
+    End If
+    If sourceFaceTokens.Count <> 1 Then
+        skipReason = "Exactly one explicitly selected face is required."
+        Exit Function
+    End If
+
+    Dim dirtyKnown As Boolean
+    hadUnsavedChanges = IsDocumentDirty(swPart, dirtyKnown)
+    If Not dirtyKnown Then
+        skipReason = swPart.GetTitle & ": skipped because its save state could not be verified"
+        Exit Function
+    End If
+    If Not ActivatePartConfig(swPart, configName, oldConfigName) Then
+        skipReason = swPart.GetTitle & ": requested configuration could not be activated"
+        GoTo Done
+    End If
+    If Not ActivateModelDocument(swPart) Then
+        skipReason = swPart.GetTitle & ": the part could not be activated"
+        GoTo Done
+    End If
+
+    Dim partFaceTokens As Collection
+    Dim faceDetails As String
+    Set partFaceTokens = BuildPartFaceTokens(swPart, sourceFaceTokens, faceDetails)
+    If partFaceTokens Is Nothing Then
+        skipReason = swPart.GetTitle & ": " & faceDetails
+        GoTo Done
+    End If
+
+    Dim edges() As Object
+    Dim edgeRefs() As Variant
+    Dim edgeCount As Long
+    Dim edgeDetails As String
+    CollectOutlineCornerEdges swPart, partFaceTokens, cornerScope, edges, edgeRefs, edgeCount, edgeDetails
+    candidateCount = edgeCount
+    If edgeCount = 0 Then
+        skipReason = swPart.GetTitle & ": " & edgeDetails
+        GoTo Done
+    End If
+
+    processingReady = True
+    If TryCreateEdgeTreatment(swPart, edges, edgeCount, sizeMm, operationMode) Then
+        treatedEdges = edgeCount
+    Else
+        treatedEdges = OriginalEdgeFallback(swPart, edgeRefs, edgeCount, sizeMm, operationMode)
+    End If
+    If treatedEdges < edgeCount Then
+        stateWarning = swPart.GetTitle & ": " & CStr(treatedEdges) & " of " & CStr(edgeCount) & _
+                       " outline corner edges accepted " & EdgeTreatmentName(operationMode) & _
+                       " at " & FormatNumberForText(sizeMm) & " mm." & vbCrLf & _
+                       "Any partial result was left open and unsaved for inspection."
+    End If
+    GoTo Done
+
+PartFailed:
+    skipReason = "Edge treatment error " & CStr(Err.Number) & ": " & Err.Description
+    stateWarning = "Any partial result was left open and unsaved for inspection."
+    Err.Clear
+Done:
+    On Error Resume Next
+    If Not RestorePartConfig(swPart, oldConfigName) Then
+        stateWarning = stateWarning & vbCrLf & "The original configuration could not be restored; the part was left open."
+    End If
+    If hadUnsavedChanges Then
+        ' Existing edits may be modified, but must never be auto-saved or closed.
+        If Len(stateWarning) > 0 Then stateWarning = stateWarning & vbCrLf
+        stateWarning = stateWarning & swPart.GetTitle & _
+                       ": had unsaved changes before the macro. Left open and unsaved; save manually when ready."
+    End If
+    swPart.ClearSelection2 True
+    On Error GoTo 0
+    ProcessPartDocument = processingReady
+End Function
+
+Private Sub CollectOutlineCornerEdges(swPart As Object, faceTokens As Collection, cornerScope As Long, _
+                                      ByRef edges() As Object, ByRef edgeRefs() As Variant, _
+                                      ByRef edgeCount As Long, ByRef details As String)
+    edgeCount = 0
+    Erase edges
+    Erase edgeRefs
+    details = "Exactly one explicitly selected planar face is required."
+    If cornerScope <> CORNERS_ALL And cornerScope <> CORNERS_RIGHT_ANGLE Then Exit Sub
+    If faceTokens Is Nothing Then Exit Sub
+    If faceTokens.Count <> 1 Then Exit Sub
+    On Error GoTo UnreadableEdges
+    Dim faceToken As Object
+    Set faceToken = faceTokens(1)
+    Dim face As Object
+    Set face = ResolveFaceTokenToPart(swPart, faceToken)
+    If face Is Nothing Then Exit Sub
+    Dim normal As Variant
+    If Not GetPlanarUnitNormal(face, normal) Then Exit Sub
+    details = "No sharp through-thickness corners were found on the outer outline."
+    If cornerScope = CORNERS_RIGHT_ANGLE Then details = "No sharp 90-degree through-thickness corners were found on the outer outline."
+    Dim loops As Variant
+    loops = face.GetLoops
+    If Not IsArray(loops) Then GoTo UnreadableEdges
+
+    ' Follow outer-loop vertices to lateral edges, never fillet the face rim.
+    Dim i As Long, j As Long, k As Long, n As Long
+    For i = LBound(loops) To UBound(loops)
+        Dim faceLoop As Object
+        Set faceLoop = loops(i)
+        If faceLoop Is Nothing Then GoTo UnreadableEdges
+        If faceLoop.IsOuter Then
+            Dim vertices As Variant
+            vertices = faceLoop.GetVertices
+            If IsArray(vertices) Then
+                For j = LBound(vertices) To UBound(vertices)
+                    Dim vertex As Object
+                    Set vertex = vertices(j)
+                    If vertex Is Nothing Then GoTo UnreadableEdges
+                    Dim incidentEdges As Variant
+                    incidentEdges = vertex.GetEdges
+                    If Not IsArray(incidentEdges) Then GoTo UnreadableEdges
+                    For k = LBound(incidentEdges) To UBound(incidentEdges)
+                        Dim edge As Object
+                        Set edge = incidentEdges(k)
+                        If edge Is Nothing Then GoTo UnreadableEdges
+                        If IsOutlineCornerEdge(edge, face, normal, cornerScope) Then
+                            Dim duplicate As Boolean
+                            duplicate = False
+                            For n = 1 To edgeCount
+                                If edges(n) Is edge Then duplicate = True
+                            Next n
+                            If Not duplicate Then
+                                edgeCount = edgeCount + 1
+                                ReDim Preserve edges(1 To edgeCount)
+                                ReDim Preserve edgeRefs(1 To edgeCount)
+                                Set edges(edgeCount) = edge
+                                ' Freeze only original corner edges before topology changes.
+                                edgeRefs(edgeCount) = Empty
+                                If edgeCount <= MAX_SINGLE_TRIES Then
+                                    On Error Resume Next
+                                    edgeRefs(edgeCount) = swPart.Extension.GetPersistReference3(edge)
+                                    Err.Clear
+                                    On Error GoTo UnreadableEdges
+                                End If
+                            End If
+                        End If
+                    Next k
+                Next j
+            End If
+        End If
+    Next i
+    Exit Sub
+UnreadableEdges:
+    details = "Could not inspect the selected face's outline safely. No corners were changed."
+    If Err.Number <> 0 Then details = details & " " & CStr(Err.Number) & ": " & Err.Description
+    Err.Clear
+    edgeCount = 0
+    Erase edges
+    Erase edgeRefs
+End Sub
+
+Private Function GetPlanarUnitNormal(face As Object, ByRef normal As Variant) As Boolean
+    Dim surface As Object
+    Set surface = face.GetSurface
+    If Not surface.IsPlane Then Exit Function
+    normal = face.Normal
+    Dim magnitude As Double
+    magnitude = Sqr(VectorDot3(normal, normal))
+    If magnitude < 0.000000001 Then
+        Err.Raise vbObjectError + 2711, "AutoRadius", "Unreadable planar face normal."
+    End If
+    normal = Array(CDbl(normal(0)) / magnitude, CDbl(normal(1)) / magnitude, CDbl(normal(2)) / magnitude)
+    GetPlanarUnitNormal = True
+End Function
+
+Private Function VectorDot3(a As Variant, b As Variant) As Double
+    VectorDot3 = CDbl(a(0)) * CDbl(b(0)) + CDbl(a(1)) * CDbl(b(1)) + CDbl(a(2)) * CDbl(b(2))
+End Function
+
+Private Function IsOutlineCornerEdge(edge As Object, selectedFace As Object, normal As Variant, _
+                                     cornerScope As Long) As Boolean
+    If cornerScope <> CORNERS_ALL And cornerScope <> CORNERS_RIGHT_ANGLE Then Exit Function
+    Dim curve As Object
+    Set curve = edge.GetCurve
+    If Not curve.IsLine Then Exit Function
+    Dim startVertex As Object, endVertex As Object
+    Set startVertex = edge.GetStartVertex
+    Set endVertex = edge.GetEndVertex
+    If startVertex Is Nothing Or endVertex Is Nothing Then Exit Function
+    Dim a As Variant, b As Variant, direction As Variant
+    a = startVertex.GetPoint
+    b = endVertex.GetPoint
+    direction = Array(CDbl(b(0)) - CDbl(a(0)), CDbl(b(1)) - CDbl(a(1)), CDbl(b(2)) - CDbl(a(2)))
+    Dim length As Double
+    length = Sqr(VectorDot3(direction, direction))
+    If length < 0.000000001 Then Exit Function
+    If Abs(VectorDot3(direction, normal)) / length < 1# - CORNER_DIRECTION_TOLERANCE Then Exit Function
+
+    Dim adjacent As Variant
+    adjacent = edge.GetTwoAdjacentFaces2
+    Dim side1 As Object, side2 As Object
+    Set side1 = adjacent(LBound(adjacent))
+    Set side2 = adjacent(LBound(adjacent) + 1)
+    If side1 Is Nothing Or side2 Is Nothing Then Exit Function
+    If side1 Is selectedFace Or side2 Is selectedFace Then Exit Function
+    Dim normal1 As Variant, normal2 As Variant
+    If Not GetPlanarUnitNormal(side1, normal1) Then Exit Function
+    If Not GetPlanarUnitNormal(side2, normal2) Then Exit Function
+    If Abs(VectorDot3(normal1, normal)) > CORNER_DIRECTION_TOLERANCE Then Exit Function
+    If Abs(VectorDot3(normal2, normal)) > CORNER_DIRECTION_TOLERANCE Then Exit Function
+    ' Coplanar seams and existing curved blends are not sharp outline corners.
+    If Abs(VectorDot3(normal1, normal2)) > 1# - CORNER_DIRECTION_TOLERANCE Then Exit Function
+    If cornerScope = CORNERS_RIGHT_ANGLE Then
+        If Abs(VectorDot3(normal1, normal2)) > RIGHT_ANGLE_DOT_TOLERANCE Then Exit Function
+    End If
+    IsOutlineCornerEdge = True
+End Function
+
+Private Function OriginalEdgeFallback(swPart As Object, edgeRefs() As Variant, edgeCount As Long, _
+                                      sizeMm As Double, operationMode As Long) As Long
+    Dim i As Long
+    For i = 1 To edgeCount
+        If i > MAX_SINGLE_TRIES Then Exit For
+        If Not IsEmpty(edgeRefs(i)) Then
+            Dim edge As Object
+            Dim referenceError As Long
+            Set edge = Nothing
+            referenceError = -1
+            On Error Resume Next
+            Err.Clear
+            Set edge = swPart.Extension.GetObjectByPersistReference3(edgeRefs(i), referenceError)
+            If Err.Number <> 0 Then Set edge = Nothing
+            Err.Clear
+            On Error GoTo 0
+            If referenceError = 0 And Not edge Is Nothing Then
+                Dim oneEdge(1 To 1) As Object
+                Set oneEdge(1) = edge
+                If TryCreateEdgeTreatment(swPart, oneEdge, 1, sizeMm, operationMode) Then
+                    OriginalEdgeFallback = OriginalEdgeFallback + 1
+                End If
+            End If
+        End If
+    Next i
+End Function
+
+
+Private Function TryCreateEdgeTreatment(swPart As Object, edges() As Object, edgeCount As Long, _
+                                        sizeMm As Double, operationMode As Long) As Boolean
+    If edgeCount <= 0 Or sizeMm <= 0# Then Exit Function
+    If operationMode <> EDGE_MODE_RADIUS And operationMode <> EDGE_MODE_CHAMFER Then Exit Function
+    On Error GoTo Done
+    swPart.ClearSelection2 True
+    Dim selData As Object
+    Set selData = swPart.SelectionManager.CreateSelectData
+    If operationMode = EDGE_MODE_RADIUS Then
+        selData.Mark = 1
+    Else
+        selData.Mark = 0
+    End If
+    Dim i As Long
+    For i = 1 To edgeCount
+        If edges(i) Is Nothing Then GoTo Done
+        If Not edges(i).Select4(i > 1, selData) Then GoTo Done
+    Next i
+
+    Dim feature As Object
+    If operationMode = EDGE_MODE_CHAMFER Then
+        Set feature = swPart.FeatureManager.InsertFeatureChamfer(CHAMFER_SELECTED_EDGES_OPTIONS, _
+            CHAMFER_ANGLE_DISTANCE, sizeMm / 1000#, CHAMFER_ANGLE_RADIANS, 0#, 0#, 0#, 0#)
+    Else
+        Set feature = CreateFilletFeature(swPart, sizeMm / 1000#, edgeCount)
+    End If
+    TryCreateEdgeTreatment = Not feature Is Nothing
+    If TryCreateEdgeTreatment Then
+        feature.Name = MakeUniqueFeatureName(swPart, EdgeTreatmentBaseName(sizeMm, operationMode))
+        swPart.EditRebuild3
+    End If
+Done:
+    On Error Resume Next
+    swPart.ClearSelection2 True
+    On Error GoTo 0
+End Function
+
+Private Function CreateFilletFeature(swPart As Object, radiusM As Double, edgeCount As Long) As Object
+
+    Set CreateFilletFeature = Nothing
+
+    On Error Resume Next
+
+    Dim radiiArray0 As Variant
+    Dim dist2Array0 As Variant
+    Dim conicRhosArray0 As Variant
+    Dim setBackArray0 As Variant
+    Dim pointArray0 As Variant
+    Dim pointDist2Array0 As Variant
+    Dim pointRhoArray0 As Variant
+
+    radiiArray0 = ZeroDoubleArray(edgeCount)
+    dist2Array0 = ZeroDoubleArray(edgeCount)
+    conicRhosArray0 = ZeroDoubleArray(edgeCount)
+    setBackArray0 = ZeroDoubleArray(edgeCount)
+    pointArray0 = ZeroDoubleArray(edgeCount)
+    pointDist2Array0 = ZeroDoubleArray(edgeCount)
+    pointRhoArray0 = ZeroDoubleArray(edgeCount)
+
+    Set CreateFilletFeature = swPart.FeatureManager.FeatureFillet3(FILLET_SELECTED_EDGES_OPTIONS, radiusM, radiusM, 0, 0, 0, 0, _
+        radiiArray0, dist2Array0, conicRhosArray0, setBackArray0, pointArray0, pointDist2Array0, pointRhoArray0)
+
+    On Error GoTo 0
+
+End Function
+
+Private Function EdgeTreatmentBaseName(sizeMm As Double, operationMode As Long) As String
+    If operationMode = EDGE_MODE_CHAMFER Then
+        EdgeTreatmentBaseName = "AutoChamfer_C" & FormatNumberForText(sizeMm)
+    Else
+        EdgeTreatmentBaseName = "AutoRadius_R" & FormatNumberForText(sizeMm)
+    End If
+End Function
+
+Private Function MakeUniqueFeatureName(swPart As Object, baseName As String) As String
+
+    If Not FeatureNameExists(swPart, baseName) Then
+
+        MakeUniqueFeatureName = baseName
+
+        Exit Function
+
+    End If
+
+    Dim i As Long
+
+    For i = 1 To 999
+
+        Dim candidate As String
+
+        candidate = baseName & "_" & Right("00" & CStr(i), 2)
+
+        If Not FeatureNameExists(swPart, candidate) Then
+
+            MakeUniqueFeatureName = candidate
+
+            Exit Function
+
+        End If
+
+    Next i
+
+    MakeUniqueFeatureName = baseName & "_" & Format(Now, "hhnnss")
+
+End Function
+
+Private Function FeatureNameExists(swPart As Object, featureName As String) As Boolean
+
+    If swPart Is Nothing Then Exit Function
+
+    Dim feat As Object
+
+    On Error Resume Next
+
+    Set feat = swPart.FirstFeature
+
+    Do While Not feat Is Nothing
+
+        If StrComp(feat.Name, featureName, vbTextCompare) = 0 Then
+
+            FeatureNameExists = True
+
+            Exit Function
+
+        End If
+
+        Set feat = feat.GetNextFeature
+
+    Loop
+
+    On Error GoTo 0
+
+End Function
+
+Private Function ZeroDoubleArray(edgeCount As Long) As Variant
+
+    If edgeCount <= 0 Then
+
+        ZeroDoubleArray = 0#
+
+        Exit Function
+
+    End If
+
+    Dim arr() As Double
+
+    ReDim arr(0 To edgeCount - 1)
+
+    Dim i As Long
+
+    For i = 0 To edgeCount - 1
+
+        arr(i) = 0#
+
+    Next i
+
+    ZeroDoubleArray = arr
+
+End Function
+
+
+Private Function GetDocumentWindowKey(swDoc As Object) As String
+
+    If swDoc Is Nothing Then Exit Function
+
+    Dim docType As Long
+    Dim pathName As String
+    Dim title As String
+
+    On Error Resume Next
+    docType = swDoc.GetType
+    pathName = swDoc.GetPathName
+    title = swDoc.GetTitle
+    On Error GoTo 0
+
+    If pathName <> "" Then
+        GetDocumentWindowKey = "path|" & CStr(docType) & "|" & LCase$(pathName)
+    ElseIf title <> "" Then
+        GetDocumentWindowKey = "title|" & CStr(docType) & "|" & LCase$(title)
+    End If
+
+End Function
+
+Private Function GetModelWindowDocuments(ByRef snapshotOk As Boolean) As Collection
+
+    snapshotOk = False
+
+    Dim docs As Collection
+    Set docs = New Collection
+
+    On Error GoTo SnapshotFailed
+
+    Dim swFrame As Object
+    Set swFrame = swApp.Frame
+    If swFrame Is Nothing Then GoTo SnapshotFailed
+
+    Dim modelWindows As Variant
+    modelWindows = swFrame.ModelWindows
+    If Not IsArray(modelWindows) Then GoTo SnapshotFailed
+
+    Dim windowObject As Variant
+    For Each windowObject In modelWindows
+        Dim swModelWindow As Object
+        Dim swDoc As Object
+
+        Set swModelWindow = windowObject
+        If Not swModelWindow Is Nothing Then Set swDoc = swModelWindow.ModelDoc
+        If Not swDoc Is Nothing Then docs.Add swDoc
+    Next windowObject
+
+    snapshotOk = True
+    Set GetModelWindowDocuments = docs
+    Exit Function
+
+SnapshotFailed:
+    Debug.Print "Model-window snapshot error " & Err.Number & ": " & Err.Description
+    Err.Clear
+    Set GetModelWindowDocuments = Nothing
+
+End Function
+
+Private Function BuildVisibleDocumentWindowKeyDict() As Object
+
+    Dim snapshotOk As Boolean
+    Dim modelDocs As Collection
+    Set modelDocs = GetModelWindowDocuments(snapshotOk)
+
+    If Not snapshotOk Or modelDocs Is Nothing Then
+        Set BuildVisibleDocumentWindowKeyDict = Nothing
+        Exit Function
+    End If
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Dim swDoc As Object
+    Dim i As Long
+    For i = 1 To modelDocs.Count
+        Set swDoc = modelDocs(i)
+
+        Dim windowKey As String
+        windowKey = GetDocumentWindowKey(swDoc)
+        If windowKey <> "" Then
+            If Not dict.Exists(windowKey) Then dict.Add windowKey, True
+        End If
+    Next i
+
+    Set BuildVisibleDocumentWindowKeyDict = dict
+
+End Function
+
+Private Function VisibleDocumentSnapshotContains(dictInitiallyVisible As Object, _
+                                                 swDoc As Object) As Boolean
+
+    If dictInitiallyVisible Is Nothing Or swDoc Is Nothing Then Exit Function
+
+    Dim windowKey As String
+    windowKey = GetDocumentWindowKey(swDoc)
+    If windowKey <> "" Then _
+        VisibleDocumentSnapshotContains = dictInitiallyVisible.Exists(windowKey)
+
+End Function
+
+Private Function ModelDocumentsAreSame(leftDoc As Object, rightDoc As Object) As Boolean
+
+    If leftDoc Is Nothing Or rightDoc Is Nothing Then Exit Function
+
+    On Error Resume Next
+    If leftDoc Is rightDoc Then
+        ModelDocumentsAreSame = True
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    Dim leftPath As String
+    Dim rightPath As String
+    leftPath = leftDoc.GetPathName
+    rightPath = rightDoc.GetPathName
+
+    If leftPath <> "" And rightPath <> "" Then
+        ModelDocumentsAreSame = (StrComp(leftPath, rightPath, vbTextCompare) = 0)
+    Else
+        ModelDocumentsAreSame = (leftDoc.GetType = rightDoc.GetType And _
+                                 StrComp(leftDoc.GetTitle, rightDoc.GetTitle, _
+                                         vbTextCompare) = 0)
+    End If
+    On Error GoTo 0
+
+End Function
+
+Private Function GetDocumentActivationName(swDoc As Object) As String
+
+    If swDoc Is Nothing Then Exit Function
+
+    Dim pathName As String
+    On Error Resume Next
+    pathName = swDoc.GetPathName
+    On Error GoTo 0
+
+    If pathName <> "" Then
+        GetDocumentActivationName = Mid$(pathName, InStrRev(pathName, "\") + 1)
+    Else
+        On Error Resume Next
+        GetDocumentActivationName = swDoc.GetTitle
+        On Error GoTo 0
+    End If
+
+End Function
+
+Private Function ActivateModelDocument(swDoc As Object) As Boolean
+
+    If swDoc Is Nothing Then Exit Function
+
+    Dim activeDoc As Object
+    Set activeDoc = swApp.ActiveDoc
+    If ModelDocumentsAreSame(activeDoc, swDoc) Then
+        ActivateModelDocument = True
+        Exit Function
+    End If
+
+    Dim activationName As String
+    activationName = GetDocumentActivationName(swDoc)
+    If activationName = "" Then Exit Function
+
+    Dim activateErrs As Long
+    Dim activatedDoc As Object
+    On Error Resume Next
+    Set activatedDoc = swApp.ActivateDoc3(activationName, False, 0, activateErrs)
+    On Error GoTo 0
+
+    Set activeDoc = swApp.ActiveDoc
+    ActivateModelDocument = ModelDocumentsAreSame(activeDoc, swDoc)
+
+End Function
+
+Private Sub PreserveModelWindow(dictWindowsToPreserve As Object, swDoc As Object)
+
+    If dictWindowsToPreserve Is Nothing Or swDoc Is Nothing Then Exit Sub
+
+    Dim windowKey As String
+    windowKey = GetDocumentWindowKey(swDoc)
+    If windowKey <> "" Then
+        If Not dictWindowsToPreserve.Exists(windowKey) Then _
+            dictWindowsToPreserve.Add windowKey, True
+    End If
+
+End Sub
+
+Private Function ShouldPreserveModelWindow(dictWindowsToPreserve As Object, _
+                                           swDoc As Object) As Boolean
+
+    If dictWindowsToPreserve Is Nothing Or swDoc Is Nothing Then Exit Function
+
+    Dim windowKey As String
+    windowKey = GetDocumentWindowKey(swDoc)
+    If windowKey <> "" Then _
+        ShouldPreserveModelWindow = dictWindowsToPreserve.Exists(windowKey)
+
+End Function
+
+Private Sub CloseVisibleDocumentsOpenedByMacro(dictInitiallyVisible As Object, _
+                                               originalDoc As Object, _
+                                               dictWindowsToPreserve As Object)
+
+    If dictInitiallyVisible Is Nothing Then Exit Sub
+
+    Dim snapshotOk As Boolean
+    Dim modelDocs As Collection
+    Set modelDocs = GetModelWindowDocuments(snapshotOk)
+    If Not snapshotOk Or modelDocs Is Nothing Then
+        Debug.Print "Could not enumerate current model windows; leaving them unchanged"
+        Exit Sub
+    End If
+
+    Dim docsToClose As Collection
+    Set docsToClose = New Collection
+
+    Dim swDoc As Object
+    Dim i As Long
+    For i = 1 To modelDocs.Count
+        Set swDoc = modelDocs(i)
+        If Not ModelDocumentsAreSame(swDoc, originalDoc) Then
+            If Not VisibleDocumentSnapshotContains(dictInitiallyVisible, swDoc) Then
+                Dim dirtyKnown As Boolean
+                If IsDocumentDirty(swDoc, dirtyKnown) Or Not dirtyKnown Then
+                    Debug.Print "  Leaving dirty or unverifiable macro window open: " & _
+                                GetDocumentActivationName(swDoc)
+                ElseIf ShouldPreserveModelWindow(dictWindowsToPreserve, swDoc) Then
+                    Debug.Print "  Leaving reported macro window open: " & _
+                                GetDocumentActivationName(swDoc)
+                Else
+                    docsToClose.Add swDoc
+                End If
+            End If
+        End If
+    Next i
+
+    Debug.Print "Extra clean document windows to close: " & docsToClose.Count
+
+    For i = docsToClose.Count To 1 Step -1
+        Set swDoc = docsToClose(i)
+
+        Dim closeName As String
+        closeName = GetDocumentActivationName(swDoc)
+        If closeName <> "" Then
+            On Error Resume Next
+            swApp.CloseDoc closeName
+            If Err.Number <> 0 Then
+                Debug.Print "  Close failed: " & closeName & " error=" & CStr(Err.Number)
+                Err.Clear
+            End If
+            On Error GoTo 0
+        End If
+    Next i
+
+    ActivateModelDocument originalDoc
+
+End Sub
+
+Private Function IsDocumentDirty(swDoc As Object, ByRef stateKnown As Boolean) As Boolean
+
+    stateKnown = False
+    If swDoc Is Nothing Then Exit Function
+
+    On Error Resume Next
+    Err.Clear
+    IsDocumentDirty = CBool(swDoc.GetSaveFlag)
+    stateKnown = (Err.Number = 0)
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+
+End Function
+
+Private Sub AddRadiusIssue(issues As Collection, issueText As String)
+
+    If issues Is Nothing Or Len(Trim$(issueText)) = 0 Then Exit Sub
+    issues.Add issueText
+    Debug.Print "  Issue: " & issueText
+
+End Sub
+
+Private Function RadiusIssueSummary(issues As Collection) As String
+
+    If issues Is Nothing Or issues.Count = 0 Then Exit Function
+
+    Dim text As String
+    text = "Skipped / attention required:"
+
+    Dim shown As Long
+    Dim i As Long
+    For i = 1 To issues.Count
+        If shown >= 12 Then Exit For
+        text = text & vbCrLf & "- " & CStr(issues(i))
+        shown = shown + 1
+    Next i
+
+    If issues.Count > shown Then
+        text = text & vbCrLf & "- ... and " & CStr(issues.Count - shown) & " more"
+    End If
+
+    RadiusIssueSummary = text
+
+End Function
+
+Private Function IsPartPath(pathName As String) As Boolean
+
+    IsPartPath = (LCase(Right(pathName, 6)) = "sldprt")
+
+End Function
+
+
+Private Function FormatNumberForText(v As Double) As String
+
+    v = Round(v, 2)
+
+    If Abs(v - Int(v)) < 0.000001 Then
+
+        FormatNumberForText = CStr(Int(v))
+
+    Else
+
+        FormatNumberForText = Replace(CStr(v), ",", ".")
+
+    End If
+
+End Function
+
+Private Function ActivatePartConfig(swPart As Object, configName As String, _
+                                    ByRef oldConfigName As String) As Boolean
+
+    ActivatePartConfig = False
+    If swPart Is Nothing Then Exit Function
+
+    On Error Resume Next
+    Err.Clear
+    oldConfigName = swPart.ConfigurationManager.ActiveConfiguration.Name
+
+    If Err.Number <> 0 Or Len(oldConfigName) = 0 Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    If Len(configName) = 0 Or _
+       StrComp(oldConfigName, configName, vbTextCompare) = 0 Then
+        ActivatePartConfig = True
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    Err.Clear
+    ActivatePartConfig = CBool(swPart.ShowConfiguration2(configName))
+    If Err.Number <> 0 Then
+        Err.Clear
+        ActivatePartConfig = False
+    End If
+
+    If ActivatePartConfig Then
+        ActivatePartConfig = (StrComp( _
+            swPart.ConfigurationManager.ActiveConfiguration.Name, _
+            configName, vbTextCompare) = 0)
+    End If
+
+    If ActivatePartConfig Then swPart.EditRebuild3
+
+    On Error GoTo 0
+
+End Function
+
+Private Function RestorePartConfig(swPart As Object, oldConfigName As String) As Boolean
+
+    RestorePartConfig = False
+    If swPart Is Nothing Then Exit Function
+    If Len(oldConfigName) = 0 Then
+        RestorePartConfig = True
+        Exit Function
+    End If
+
+    On Error Resume Next
+
+    Dim activeConfigName As String
+    Err.Clear
+    activeConfigName = swPart.ConfigurationManager.ActiveConfiguration.Name
+    If Err.Number <> 0 Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    If StrComp(activeConfigName, oldConfigName, vbTextCompare) <> 0 Then
+        RestorePartConfig = CBool(swPart.ShowConfiguration2(oldConfigName))
+        If Err.Number <> 0 Then
+            Err.Clear
+            RestorePartConfig = False
+        End If
+
+        If RestorePartConfig Then swPart.EditRebuild3
+    Else
+        RestorePartConfig = True
+    End If
+
+    If RestorePartConfig Then
+        RestorePartConfig = (StrComp( _
+            swPart.ConfigurationManager.ActiveConfiguration.Name, _
+            oldConfigName, vbTextCompare) = 0)
+    End If
+
+    On Error GoTo 0
+
+End Function

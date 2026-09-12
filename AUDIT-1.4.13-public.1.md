@@ -45,7 +45,7 @@ links point to its exact release commit. ExcelsisView was not changed or republi
 
 Helper is GPL-3.0-only. Root/source/packaged license text and package metadata
 agree. The exact expanded source is at
-[source/ExcelsisHelper-1.4.13-public.1/](source/ExcelsisHelper-1.4.13-public.1/).
+[source/ExcelsisHelper-1.4.13-public.1/](https://github.com/simonsystem609/ExcelsisHelper/tree/8f48d7faae2c03a03e28daa9a56148d799ceb072/source/ExcelsisHelper-1.4.13-public.1/).
 Its 123 files total 4,070,485 bytes; an independently re-extracted ZIP matches
 every path, size and SHA-256.
 
@@ -58,9 +58,9 @@ Unchanged artwork, machining data and existing third-party integrations retain
 their reviewed provenance. New scripts and the assembly backup macro are
 project-authored API interoperability. DwgThumbnailReader retains its documented
 MIT upstream pin. Electron/Chromium, NSIS and Elevate notices are preserved. See
-[PROVENANCE.md](source/ExcelsisHelper-1.4.13-public.1/docs/PROVENANCE.md),
-[THIRD_PARTY_NOTICES.md](source/ExcelsisHelper-1.4.13-public.1/THIRD_PARTY_NOTICES.md)
-and [DEPENDENCY_LICENSES.md](source/ExcelsisHelper-1.4.13-public.1/docs/DEPENDENCY_LICENSES.md).
+[PROVENANCE.md](https://github.com/simonsystem609/ExcelsisHelper/tree/8f48d7faae2c03a03e28daa9a56148d799ceb072/source/ExcelsisHelper-1.4.13-public.1/docs/PROVENANCE.md),
+[THIRD_PARTY_NOTICES.md](https://github.com/simonsystem609/ExcelsisHelper/tree/8f48d7faae2c03a03e28daa9a56148d799ceb072/source/ExcelsisHelper-1.4.13-public.1/THIRD_PARTY_NOTICES.md)
+and [DEPENDENCY_LICENSES.md](https://github.com/simonsystem609/ExcelsisHelper/tree/8f48d7faae2c03a03e28daa9a56148d799ceb072/source/ExcelsisHelper-1.4.13-public.1/docs/DEPENDENCY_LICENSES.md).
 
 Read-only preview extraction is retained. No vendor SDK, proprietary CAD runtime
 or model decoder, customer document, deployment preset, credential, diagnostic
