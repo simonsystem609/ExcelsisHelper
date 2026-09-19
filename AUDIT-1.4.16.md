@@ -39,7 +39,7 @@ release commit. ExcelsisView is unchanged.
 
 Helper is GPL-3.0-only. Root/source/packaged license text, package metadata
 and the NSIS license selection agree. The exact source is at
-[source/ExcelsisHelper-1.4.16/](source/ExcelsisHelper-1.4.16/): 128 files,
+[source/ExcelsisHelper-1.4.16/](https://github.com/simonsystem609/ExcelsisHelper/blob/8e6dc653fdda9307e1ede0bd6d4b16eb6d2db1a8/source/ExcelsisHelper-1.4.16/): 128 files,
 4,128,402 bytes. Every ZIP entry's path, size and SHA-256 independently matches
 the frozen source and build input. The archive includes editable app/scripts,
 tests, build configuration, icons, notices, nine SWBs and nine build-ready SWPs.
@@ -58,9 +58,9 @@ bundle SHA-256 remains pinned to
 The project owns the original macros and artwork; new macro changes are
 project-authored API interoperability, not redistributed vendor code.
 
-See [PROVENANCE.md](source/ExcelsisHelper-1.4.16/docs/PROVENANCE.md),
-[THIRD_PARTY_NOTICES.md](source/ExcelsisHelper-1.4.16/THIRD_PARTY_NOTICES.md)
-and [DEPENDENCY_LICENSES.md](source/ExcelsisHelper-1.4.16/docs/DEPENDENCY_LICENSES.md).
+See [PROVENANCE.md](https://github.com/simonsystem609/ExcelsisHelper/blob/8e6dc653fdda9307e1ede0bd6d4b16eb6d2db1a8/source/ExcelsisHelper-1.4.16/docs/PROVENANCE.md),
+[THIRD_PARTY_NOTICES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/8e6dc653fdda9307e1ede0bd6d4b16eb6d2db1a8/source/ExcelsisHelper-1.4.16/THIRD_PARTY_NOTICES.md)
+and [DEPENDENCY_LICENSES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/8e6dc653fdda9307e1ede0bd6d4b16eb6d2db1a8/source/ExcelsisHelper-1.4.16/docs/DEPENDENCY_LICENSES.md).
 Read-only embedded thumbnail/preview extraction is preserved. No vendor SDK,
 proprietary CAD runtime/model decoder, customer document, preset, credential,
 diagnostic bundle, operational control or private build tooling is included.

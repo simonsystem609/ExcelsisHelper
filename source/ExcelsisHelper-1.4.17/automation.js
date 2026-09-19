@@ -120,9 +120,10 @@ const ui = {
   settingsHotkeysEnabled: document.getElementById("settingsHotkeysEnabled"),
   settingsPasteProjectDateHotkey: document.getElementById("settingsPasteProjectDateHotkey"),
   settingsCopyPathHotkey: document.getElementById("settingsCopyPathHotkey"),
-  settingsAutoRadiusHotkey: document.getElementById("settingsAutoRadiusHotkey"),
+  settingsMacroShortcuts: document.getElementById("settingsMacroShortcuts"),
+  addMacroShortcutBtn: document.getElementById("addMacroShortcutBtn"),
   settingsProjectDateTemplate: document.getElementById("settingsProjectDateTemplate"),
-  autoRadiusShortcutNote: document.getElementById("autoRadiusShortcutNote"),
+  macroShortcutNotes: document.getElementById("macroShortcutNotes"),
   settingsGroupResetButtons: document.querySelectorAll("[data-settings-reset]"),
   settingsSolidWorksIdlePauseMinutes: document.getElementById("settingsSolidWorksIdlePauseMinutes"),
   settingsRecentDocsNewEntryBurstSeconds: document.getElementById("settingsRecentDocsNewEntryBurstSeconds"),
@@ -453,6 +454,7 @@ async function refreshMacroTiles() {
   state.macroRoot = result.root || state.macroRoot;
   state.macroWarnings = result.warnings || [];
   renderMacroTiles();
+  refreshMacroShortcutOptions();
 }
 
 async function saveMacroDescription(tile, description) {
@@ -2303,7 +2305,7 @@ const I18N_HU = {
   "Filter:": "Szűrő:",
   // Macro view
   "Open Macro Folder": "Makró mappa megnyitása",
-  "AutoRadius shortcut:": "AutoRadius gyorsbillentyű:",
+  "Macro shortcuts:": "Makró gyorsbillentyűk:",
   "disabled": "kikapcsolva",
   // Doc Search
   "Parts": "Alkatrészek",
@@ -2371,7 +2373,13 @@ const I18N_HU = {
   "Enable helper hotkeys": "Segéd gyorsbillentyűk bekapcsolása",
   "Paste project/date text": "Projekt/dátum szöveg beillesztése",
   "Copy Explorer selection path": "Explorer kijelölés útvonalának másolása",
-  "AutoRadius shortcut (SOLIDWORKS only)": "AutoRadius gyorsbillentyű (csak SOLIDWORKS)",
+  "Macro shortcuts (SOLIDWORKS only)": "Makró gyorsbillentyűk (csak SOLIDWORKS)",
+  "Add macro shortcut": "Makró gyorsbillentyű hozzáadása",
+  "Remove macro shortcut": "Makró gyorsbillentyű eltávolítása",
+  "Choose macro": "Makró kiválasztása",
+  "Macro": "Makró",
+  "Shortcut": "Gyorsbillentyű",
+  "Missing macro": "Hiányzó makró",
   "Pasted text template": "Beillesztett szöveg sablon",
   "SOLIDWORKS Activity": "SOLIDWORKS aktivitás",
   "Default pauses after 3 minutes away from SOLIDWORKS": "Alapból 3 perc SOLIDWORKS-távollét után szünetel",
@@ -3318,11 +3326,91 @@ async function createGcodeOptimizedCopy() {
   }
 }
 
-function renderAutoRadiusShortcutNote(settings = state.settings) {
-  if (!ui.autoRadiusShortcutNote) return;
+function macroShortcutDefaults() {
+  return state.defaults?.hotkeys?.macroShortcuts || [
+    { macro: "Radius_v9.swp", shortcut: "Alt+R" },
+    { macro: "DXF_v16.swp", shortcut: "Alt+D" },
+  ];
+}
+
+function renderMacroShortcutNotes(settings = state.settings) {
+  if (!ui.macroShortcutNotes) return;
   const enabled = settings?.hotkeys?.enabled !== false;
-  const shortcut = String(settings?.hotkeys?.autoRadius || "Alt+R").trim() || "Alt+R";
-  ui.autoRadiusShortcutNote.textContent = `${t("AutoRadius shortcut:")} ${enabled ? shortcut : t("disabled")}`;
+  ui.macroShortcutNotes.replaceChildren();
+  if (!enabled) {
+    ui.macroShortcutNotes.textContent = `${t("Macro shortcuts:")} ${t("disabled")}`;
+    return;
+  }
+  for (const binding of settings?.hotkeys?.macroShortcuts || macroShortcutDefaults()) {
+    const note = document.createElement("span");
+    note.textContent = `${binding.macro}: ${binding.shortcut}`;
+    ui.macroShortcutNotes.appendChild(note);
+  }
+}
+
+function populateMacroShortcutSelect(select, selected) {
+  select.replaceChildren(new Option(t("Choose macro"), ""));
+  for (const tile of state.macroTiles || []) {
+    select.add(new Option(tile.relativePath, tile.relativePath));
+  }
+  if (selected && !Array.from(select.options).some((option) => option.value === selected)) {
+    select.add(new Option(`${selected} (${t("Missing macro")})`, selected));
+  }
+  select.value = selected || "";
+}
+
+function refreshMacroShortcutOptions() {
+  ui.settingsMacroShortcuts?.querySelectorAll("select").forEach((select) => {
+    populateMacroShortcutSelect(select, select.value);
+  });
+}
+
+function addMacroShortcutRow(binding = { macro: "", shortcut: "" }) {
+  if (!ui.settingsMacroShortcuts || ui.settingsMacroShortcuts.children.length >= 32) return;
+  const row = document.createElement("div");
+  row.className = "macro-shortcut-row";
+  const macroLabel = document.createElement("label");
+  const macroTitle = document.createElement("span");
+  macroTitle.textContent = t("Macro");
+  const select = document.createElement("select");
+  populateMacroShortcutSelect(select, binding.macro);
+  macroLabel.append(macroTitle, select);
+  const shortcutLabel = document.createElement("label");
+  const shortcutTitle = document.createElement("span");
+  shortcutTitle.textContent = t("Shortcut");
+  const input = document.createElement("input");
+  input.value = binding.shortcut || "";
+  input.placeholder = "Alt+D";
+  input.spellcheck = false;
+  input.maxLength = 100;
+  shortcutLabel.append(shortcutTitle, input);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "macro-shortcut-icon danger";
+  remove.textContent = "\u00d7";
+  remove.title = t("Remove macro shortcut");
+  remove.setAttribute("aria-label", remove.title);
+  remove.addEventListener("click", () => {
+    row.remove();
+    ui.addMacroShortcutBtn.disabled = false;
+  });
+  row.append(macroLabel, shortcutLabel, remove);
+  ui.settingsMacroShortcuts.appendChild(row);
+  ui.addMacroShortcutBtn.disabled = ui.settingsMacroShortcuts.children.length >= 32;
+}
+
+function renderMacroShortcutRows(bindings) {
+  if (!ui.settingsMacroShortcuts) return;
+  ui.settingsMacroShortcuts.replaceChildren();
+  ui.addMacroShortcutBtn.disabled = false;
+  bindings.forEach(addMacroShortcutRow);
+}
+
+function readMacroShortcutRows() {
+  return Array.from(ui.settingsMacroShortcuts?.children || [], (row) => ({
+    macro: row.querySelector("select").value,
+    shortcut: row.querySelector("input").value.trim(),
+  }));
 }
 
 function renderSettings(settings) {
@@ -3334,12 +3422,12 @@ function renderSettings(settings) {
     ui.settingsPasteProjectDateHotkey.value = settings.hotkeys?.pasteProjectDate || "Ctrl+Space";
   }
   if (ui.settingsCopyPathHotkey) ui.settingsCopyPathHotkey.value = settings.hotkeys?.copyExplorerPath || "F7,F7";
-  if (ui.settingsAutoRadiusHotkey) ui.settingsAutoRadiusHotkey.value = settings.hotkeys?.autoRadius || "Alt+R";
   if (ui.settingsProjectDateTemplate) {
     ui.settingsProjectDateTemplate.value = settings.hotkeys?.projectDateTemplate || "PRJ-[currentdate]";
   }
   applyUiLanguage(settings.uiLanguage || "en");
-  renderAutoRadiusShortcutNote(settings);
+  renderMacroShortcutRows(settings.hotkeys?.macroShortcuts || macroShortcutDefaults());
+  renderMacroShortcutNotes(settings);
   if (ui.settingsSolidWorksIdlePauseMinutes) {
     ui.settingsSolidWorksIdlePauseMinutes.value = settings.activity?.solidWorksIdlePauseMinutes || 3;
   }
@@ -3394,7 +3482,7 @@ function readSettingsForm() {
       enabled: ui.settingsHotkeysEnabled?.checked !== false,
       pasteProjectDate: (ui.settingsPasteProjectDateHotkey?.value || "Ctrl+Space").trim(),
       copyExplorerPath: (ui.settingsCopyPathHotkey?.value || "F7,F7").trim(),
-      autoRadius: (ui.settingsAutoRadiusHotkey?.value || "Alt+R").trim(),
+      macroShortcuts: readMacroShortcutRows(),
       projectPrefix: state.settings?.hotkeys?.projectPrefix || "PRJ-",
       projectDateTemplate: (ui.settingsProjectDateTemplate?.value || "PRJ-[currentdate]").trim(),
       projectDateFormat: state.settings?.hotkeys?.projectDateFormat || "yyyy.MM.dd",
@@ -3499,7 +3587,7 @@ function applySettingsGroupDefaults(group) {
         ui.settingsPasteProjectDateHotkey.value = hotkeys.pasteProjectDate || "Ctrl+Space";
       }
       if (ui.settingsCopyPathHotkey) ui.settingsCopyPathHotkey.value = hotkeys.copyExplorerPath || "F7,F7";
-      if (ui.settingsAutoRadiusHotkey) ui.settingsAutoRadiusHotkey.value = hotkeys.autoRadius || "Alt+R";
+      renderMacroShortcutRows(hotkeys.macroShortcuts || macroShortcutDefaults());
       if (ui.settingsProjectDateTemplate) {
         ui.settingsProjectDateTemplate.value = hotkeys.projectDateTemplate || "PRJ-[currentdate]";
       }
@@ -4430,6 +4518,10 @@ ui.refreshMacroTilesBtn.addEventListener("click", refreshMacroTiles);
 ui.openMacroFolderBtn.addEventListener("click", openMacroFolder);
 
 ui.settingsSaveBtn.addEventListener("click", saveSettings);
+if (ui.addMacroShortcutBtn) ui.addMacroShortcutBtn.addEventListener("click", () => {
+  addMacroShortcutRow();
+  ui.settingsMacroShortcuts.lastElementChild?.querySelector("select")?.focus();
+});
 ui.settingsResetBtn.addEventListener("click", resetSettings);
 if (ui.settingsImportBtn) ui.settingsImportBtn.addEventListener("click", importSettings);
 if (ui.settingsExportBtn) ui.settingsExportBtn.addEventListener("click", exportSettings);
@@ -4440,7 +4532,9 @@ if (ui.settingsUiLanguage) {
   // Live-preview the UI language as soon as it's changed (before Save).
   ui.settingsUiLanguage.addEventListener("change", () => {
     applyUiLanguage(ui.settingsUiLanguage.value);
-    renderAutoRadiusShortcutNote(state.settings);
+    const draftBindings = readMacroShortcutRows();
+    renderMacroShortcutRows(draftBindings);
+    renderMacroShortcutNotes(state.settings);
     if (state.lastSettingsState) {
       renderSettingsState(state.lastSettingsState.result, state.lastSettingsState.action);
     }

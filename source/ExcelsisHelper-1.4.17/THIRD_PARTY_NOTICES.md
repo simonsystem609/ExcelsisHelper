@@ -1,7 +1,7 @@
 # Third-Party Notices
 
-This file covers Excelsis Helper 1.4.16, including the packaging and
-export-folder patch dated 2026-09-10. Project-owned material is
+This file covers Excelsis Helper 1.4.17, including configurable macro shortcuts
+and the DXF export updates dated 2026-09-19. Project-owned material is
 licensed under GPL-3.0-only in `LICENSE`. Components listed below remain under
 their respective licenses.
 

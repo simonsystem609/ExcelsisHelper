@@ -11,7 +11,10 @@
       enabled: true,
       pasteProjectDate: "Ctrl+Space",
       copyExplorerPath: "F7,F7",
-      autoRadius: "Alt+R",
+      macroShortcuts: [
+        { macro: "Radius_v9.swp", shortcut: "Alt+R" },
+        { macro: "DXF_v16.swp", shortcut: "Alt+D" },
+      ],
       projectPrefix: "PRJ-",
       projectDateTemplate: "PRJ-[currentdate]",
       projectDateFormat: "yyyy.MM.dd",

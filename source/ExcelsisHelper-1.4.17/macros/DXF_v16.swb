@@ -1,7 +1,3 @@
-' Read-only-friendly project variant generated on 2026-05-18.
-' Original macro left untouched. This variant should only write independent output files.
-' Source: DXF_v16.swb
-
 Option Explicit
 
 
@@ -15,9 +11,11 @@ Const THICKNESS_LIMIT As Double = 20.1
 Const THIN_PLATE_MIN_RATIO As Double = 2#
 Const MIN_PLANAR_AREA_RATIO As Double = 0.25
 Const MIN_LARGEST_PLANAR_FOOTPRINT_RATIO As Double = 0.15
-' See notes on the washerlike filter in DXF_v16.swb. Same intent: a real
-' washer is small + relatively thick + roughly round.
-Const WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO As Double = 12#
+' Compact hardware heuristic, not semantic fastener recognition. DIN 9021
+' washers through M20 include 50 x 3 and 60 x 4 mm; use an inclusive 60 mm
+' footprint and ratio <= 20 (including normal thickness tolerance).
+' Keep the aspect guard so long brackets/strips do not become washerlike.
+Const WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO As Double = 20#
 Const WASHERLIKE_MAX_LONG_MM As Double = 60#
 Const WASHERLIKE_MIN_ASPECT As Double = 0.7
 Const DEFAULT_MATERIAL As String = "MATERIAL"
@@ -27,7 +25,6 @@ Const swViewDisplayHideAllTypes As Long = 198
 Const swSaveAsCurrentVersion      As Long = 0
 Const swSaveAsOptions_Silent      As Long = 1
 Const swOpenDocOptions_Silent     As Long = 1
-Const swOpenDocOptions_ReadOnly   As Long = 2
 Const swExportToDWG_ExportSheetMetal As Long = 1
 Const swExportToDWG_ExportSelectedFacesOrLoops As Long = 2
 Const swExportToDWG_ExportAnnotationViews As Long = 3
@@ -49,14 +46,6 @@ Const MODE_REGULAR As Integer = 1
 
 Const MODE_PRECUT  As Integer = 2
 
-Const TDCBF_YES_BUTTON As Long = &H2
-Const TDCBF_NO_BUTTON As Long = &H4
-Const TDCBF_CANCEL_BUTTON As Long = &H8
-Const TDCBF_RETRY_BUTTON As Long = &H10
-Const DIALOG_ID_CANCEL As Long = 2
-Const DIALOG_ID_RETRY As Long = 4
-Const DIALOG_ID_YES As Long = 6
-Const DIALOG_ID_NO As Long = 7
 
 Const ASSEMBLY_EXPORT_REGULAR As Integer = 1
 
@@ -85,21 +74,45 @@ Dim g_tracePath As String
 Dim g_resultPath As String
 
 Dim g_traceComponent As String
+Dim g_archiveTracePath As String
+Dim g_outputOwners As Object
+Dim g_originalConfigurations As Object
+Dim g_initiallyVisibleDocuments As Object
+Dim g_candidateOwnership As Object
+Dim g_stopBatchReason As String
+Dim g_userCancelled As Boolean
+Dim g_preflightToolbox As Object
+Dim g_preflightRejected As Object
+Dim g_missingOnly As Boolean
+Dim g_assemblyFolders As Boolean
+Dim g_candidateExisting As Boolean
+Dim g_existingCount As Long
+Dim g_runRootPath As String
+Dim g_runRootConfiguration As String
+Dim g_partNameOwners As Object
+Dim g_folderNameOwners As Object
+Dim g_forceIdentityTags As Boolean
+Dim g_candidateResults As Object
+Dim g_candidateKey As String
+Dim g_candidateReason As String
+Dim g_importComponent As Object
+Dim g_importUnknown As Boolean
+Dim g_importHint As String
+Const DXF_FILTER_REVISION As String = "2026-09-18-preflight-incremental-4"
+Const swThisConfiguration As Long = 1
+Const swSuppressFeature As Long = 0
+Const swUnSuppressFeature As Long = 2
 
 #If VBA7 Then
 Private Declare PtrSafe Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
-Private Declare PtrSafe Function ExcelsisTaskDialog Lib "comctl32.dll" Alias "TaskDialog" ( _
-    ByVal hwndOwner As LongPtr, ByVal hInstance As LongPtr, _
-    ByVal pszWindowTitle As LongPtr, ByVal pszMainInstruction As LongPtr, _
-    ByVal pszContent As LongPtr, ByVal dwCommonButtons As Long, _
-    ByVal pszIcon As LongPtr, ByRef pnButton As Long) As Long
+Private Declare PtrSafe Function DxfGetAsyncKeyState Lib "user32" Alias "GetAsyncKeyState" (ByVal key As Long) As Integer
+Private Declare PtrSafe Function DxfGetForegroundWindow Lib "user32" Alias "GetForegroundWindow" () As LongPtr
+Private Declare PtrSafe Function DxfGetWindowThreadProcessId Lib "user32" Alias "GetWindowThreadProcessId" (ByVal hwnd As LongPtr, ByRef processId As Long) As Long
 #Else
 Private Declare Function ExcelsisGetCurrentProcessId Lib "kernel32" Alias "GetCurrentProcessId" () As Long
-Private Declare Function ExcelsisTaskDialog Lib "comctl32.dll" Alias "TaskDialog" ( _
-    ByVal hwndOwner As Long, ByVal hInstance As Long, _
-    ByVal pszWindowTitle As Long, ByVal pszMainInstruction As Long, _
-    ByVal pszContent As Long, ByVal dwCommonButtons As Long, _
-    ByVal pszIcon As Long, ByRef pnButton As Long) As Long
+Private Declare Function DxfGetAsyncKeyState Lib "user32" Alias "GetAsyncKeyState" (ByVal key As Long) As Integer
+Private Declare Function DxfGetForegroundWindow Lib "user32" Alias "GetForegroundWindow" () As Long
+Private Declare Function DxfGetWindowThreadProcessId Lib "user32" Alias "GetWindowThreadProcessId" (ByVal hwnd As Long, ByRef processId As Long) As Long
 #End If
 
 Private gExcelsisMacroMarkerOwned As Boolean
@@ -213,7 +226,7 @@ Private Sub ExcelsisStartMacroRunMarker()
     If Not fso.FolderExists(root) Then fso.CreateFolder root
     gExcelsisMacroMarkerPayload = "{""schema"":""excelsis-helper-macro-run-v1"",""pid"":" & _
         CStr(ExcelsisGetCurrentProcessId()) & ",""startedAt"":""" & _
-        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""DXF_v16_ROfriendy.swp""}"
+        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""DXF_v16.swp""}"
     Set markerFile = fso.CreateTextFile(root & "\macro-running.json", True, False)
     markerFile.Write gExcelsisMacroMarkerPayload
     markerFile.Close
@@ -263,22 +276,104 @@ Function TraceFileLabel(filePath As String) As String
 End Function
 
 Sub TraceRun(message As String)
-
+    Dim fileNo As Integer, traceLine As String, target As Variant
     If g_tracePath = "" Then Exit Sub
-
-    Dim fileNo As Integer
-
+    traceLine = Format$(Now, "yyyy-mm-dd hh:nn:ss") & " " & DiagnosticLineValue(message)
+    If g_traceComponent <> "" Then traceLine = traceLine & " | candidate=" & DiagnosticLineValue(g_traceComponent)
+    If InStr(1, message, "reject=", vbTextCompare) > 0 Or _
+       InStr(1, message, "skip=", vbTextCompare) > 0 Then g_candidateReason = DiagnosticLineValue(message)
     On Error Resume Next
-
-    fileNo = FreeFile
-    Open g_tracePath For Append As #fileNo
-    Print #fileNo, Format$(Now, "yyyy-mm-dd hh:nn:ss") & " " & _
-                   Replace$(Replace$(message, vbCr, " "), vbLf, " ")
-    Close #fileNo
-
+    For Each target In Array(g_tracePath, g_archiveTracePath)
+        If CStr(target) <> "" Then
+            fileNo = FreeFile
+            Open CStr(target) For Append As #fileNo
+            Print #fileNo, traceLine
+            Close #fileNo
+        End If
+    Next target
     On Error GoTo 0
-
 End Sub
+
+Sub BeginDxfCandidate(partPath As String, cfg As String, route As String)
+    g_traceComponent = partPath & "@" & cfg
+    g_candidateKey = LCase$(partPath) & "@" & cfg
+    g_candidateReason = ""
+    g_candidateExisting = False
+    g_importHint = ""
+    If g_candidateResults Is Nothing Then Set g_candidateResults = CreateObject("Scripting.Dictionary")
+    g_candidateResults(g_candidateKey) = "PENDING"
+    TraceRun "candidate-begin route=" & route & " requested-configuration=" & DiagnosticLineValue(cfg)
+End Sub
+
+Sub FinishDxfCandidate(ByVal exported As Boolean)
+    If g_candidateKey = "" Then Exit Sub
+    Dim result As String
+    If exported Then
+        result = "EXPORTED"
+        If g_candidateExisting Then result = "EXISTS"
+    Else
+        If g_candidateReason = "" Then g_candidateReason = "No verified output; see export API results above."
+        result = "NOT-EXPORTED " & g_candidateReason
+    End If
+    g_candidateResults(g_candidateKey) = result
+    TraceRun "candidate-end result=" & result
+    g_candidateKey = ""
+End Sub
+
+Sub TraceCandidateSummary()
+    Dim key As Variant, exported As Long, existing As Long, remaining As Long
+    If g_candidateResults Is Nothing Then Exit Sub
+    For Each key In g_candidateResults.Keys
+        If CStr(g_candidateResults(key)) = "EXPORTED" Then
+            exported = exported + 1
+        ElseIf CStr(g_candidateResults(key)) = "EXISTS" Then
+            existing = existing + 1
+        Else
+            remaining = remaining + 1
+            TraceRun "review candidate=" & CStr(key) & " result=" & CStr(g_candidateResults(key))
+        End If
+    Next key
+    TraceRun "coverage unique-candidates=" & CStr(g_candidateResults.Count) & _
+             " exported=" & CStr(exported) & " existing=" & CStr(existing) & " skipped-or-failed=" & CStr(remaining)
+End Sub
+
+Function VerifyDxfOutput(ByVal apiOK As Boolean, ByVal filePath As String) As Boolean
+    Dim fso As Object, bytes As Double
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(filePath) Then bytes = CDbl(fso.GetFile(filePath).Size)
+    VerifyDxfOutput = (apiOK And bytes > 0#)
+    TraceRun "output api-ok=" & CStr(apiOK) & " bytes=" & CStr(bytes) & _
+             " verified=" & CStr(VerifyDxfOutput) & " path=" & DiagnosticLineValue(filePath)
+    Exit Function
+Failed:
+    TraceRun "output reject=verification-failed error=" & CStr(Err.Number) & " path=" & DiagnosticLineValue(filePath)
+End Function
+
+Function ClaimDxfOutput(ByVal filePath As String, ByVal partPath As String, ByVal cfg As String) As String
+    Dim key As String, owner As String, base As String, index As Long
+    owner = LCase$(partPath) & vbTab & cfg
+    Dim ambiguous As Boolean, nameKey As String
+    ambiguous = g_forceIdentityTags
+    nameKey = DxfPartNameKey(partPath, cfg)
+    If Not g_partNameOwners Is Nothing Then
+        If g_partNameOwners.Exists(nameKey) Then ambiguous = ambiguous Or (CStr(g_partNameOwners(nameKey)) = "*")
+    End If
+    If ambiguous Then filePath = Left$(filePath, Len(filePath) - 4) & "_" & DxfIdentityTag(owner) & ".dxf"
+    If g_outputOwners Is Nothing Then Set g_outputOwners = CreateObject("Scripting.Dictionary")
+    base = Left$(filePath, Len(filePath) - 4)
+    key = LCase$(filePath)
+    index = 1
+    Do While g_outputOwners.Exists(key)
+        If CStr(g_outputOwners(key)) = owner Then Exit Do
+        index = index + 1
+        filePath = base & "_variant" & CStr(index) & ".dxf"
+        key = LCase$(filePath)
+    Loop
+    g_outputOwners(key) = owner
+    If index > 1 Then TraceRun "output filename-collision disambiguated=" & DiagnosticLineValue(filePath)
+    ClaimDxfOutput = filePath
+End Function
 
 Private Function DiagnosticLineValue(ByVal value As String) As String
 
@@ -305,6 +400,7 @@ Private Sub WriteDxfRunResult(ByVal status As String, ByVal errorNumber As Long,
     Print #fileNo, "errorSource=" & DiagnosticLineValue(errorSource)
     Print #fileNo, "errorDescription=" & DiagnosticLineValue(errorDescription)
     Print #fileNo, "tracePath=" & DiagnosticLineValue(g_tracePath)
+    Print #fileNo, "archiveTracePath=" & DiagnosticLineValue(g_archiveTracePath)
     Print #fileNo, "component=" & DiagnosticLineValue(g_traceComponent)
     Close #fileNo
 
@@ -313,26 +409,45 @@ Private Sub WriteDxfRunResult(ByVal status As String, ByVal errorNumber As Long,
 End Sub
 
 Private Sub InitializeRunDiagnostics()
-
-    Dim fileNo As Integer
-
+    Dim fileNo As Integer, fso As Object, stem As String, index As Long
     g_tracePath = Environ$("TEMP") & "\Excelsis_DXF_last_run.log"
     g_resultPath = Environ$("TEMP") & "\Excelsis_DXF_last_result.txt"
-    g_traceComponent = ""
-
+    g_traceComponent = "": g_candidateKey = "": g_candidateReason = ""
+    Set g_importComponent = Nothing
+    Set g_initiallyVisibleDocuments = Nothing
+    Set g_candidateOwnership = CreateObject("Scripting.Dictionary")
+    g_stopBatchReason = ""
+    g_userCancelled = False
+    Set g_preflightToolbox = CreateObject("Scripting.Dictionary")
+    Set g_preflightRejected = CreateObject("Scripting.Dictionary")
+    g_missingOnly = True: g_assemblyFolders = False
+    g_candidateExisting = False: g_existingCount = 0
+    g_runRootPath = "": g_runRootConfiguration = ""
+    Set g_partNameOwners = CreateObject("Scripting.Dictionary")
+    Set g_folderNameOwners = CreateObject("Scripting.Dictionary")
+    g_forceIdentityTags = False
+    Set g_outputOwners = CreateObject("Scripting.Dictionary")
+    Set g_originalConfigurations = CreateObject("Scripting.Dictionary")
+    Set g_candidateResults = CreateObject("Scripting.Dictionary")
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    stem = Environ$("TEMP") & "\Excelsis_DXF_" & Format$(Now, "yyyymmdd-hhnnss") & "_" & CStr(ExcelsisGetCurrentProcessId())
+    g_archiveTracePath = stem & ".log"
+    Do While fso.FileExists(g_archiveTracePath)
+        index = index + 1
+        g_archiveTracePath = stem & "_" & CStr(index) & ".log"
+    Loop
     On Error Resume Next
-
     fileNo = FreeFile
-
     Open g_tracePath For Output As #fileNo
-    Print #fileNo, "Excelsis DXF assembly-context trace"
+    Print #fileNo, "Excelsis DXF trace"
     Close #fileNo
-
     On Error GoTo 0
-
-    TraceRun "run-start"
+    TraceRun "run-start revision=" & DXF_FILTER_REVISION & " archive=" & g_archiveTracePath
+    TraceRun "limits thickness-mm=" & CStr(THICKNESS_LIMIT) & " plate-ratio=" & CStr(THIN_PLATE_MIN_RATIO) & _
+             " planar-area=" & CStr(MIN_PLANAR_AREA_RATIO) & " footprint-area=" & CStr(MIN_LARGEST_PLANAR_FOOTPRINT_RATIO) & _
+             " washer-length-mm=" & CStr(WASHERLIKE_MAX_LONG_MM) & " washer-ratio=" & CStr(WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO) & _
+             " washer-aspect=" & CStr(WASHERLIKE_MIN_ASPECT)
     WriteDxfRunResult "RUNNING", 0, "", ""
-
 End Sub
 
 Sub InitializeRunTrace(swModel As Object)
@@ -357,7 +472,11 @@ Sub main()
     InitializeRunDiagnostics
     ExcelsisStartMacroRunMarker
     ExcelsisMacroMain
-    WriteDxfRunResult "OK", 0, "", ""
+    If g_userCancelled Then
+        WriteDxfRunResult "CANCELLED", 0, "", "Stopped by user; completed DXFs were kept."
+    Else
+        WriteDxfRunResult "OK", 0, "", ""
+    End If
     ExcelsisStopMacroRunMarker
     Exit Sub
 MacroFailed:
@@ -371,6 +490,8 @@ MacroFailed:
              " source=" & DiagnosticLineValue(errorSource) & _
              " description=" & DiagnosticLineValue(errorDescription)
     If g_traceComponent <> "" Then TraceRun "ERROR component=" & DiagnosticLineValue(g_traceComponent)
+    TraceCandidateSummary
+    RestoreOriginalConfigurations
     WriteDxfRunResult "ERROR", errorNumber, errorSource, errorDescription
     ExcelsisStopMacroRunMarker
     MsgBox "DXF export failed." & vbCrLf & _
@@ -472,7 +593,17 @@ Private Sub ExcelsisMacroMain()
     End If
 
     InitializeRunTrace swModel
+    g_runRootPath = CStr(swModel.GetPathName)
+    g_runRootConfiguration = GetActiveConfigName(swModel)
     TraceRun "document-path=" & DiagnosticLineValue(swModel.GetPathName)
+
+    Dim selectedCandidates As Collection
+    If mType = swDocASSEMBLY And selCount > 0 Then
+        Set selectedCandidates = SnapshotSelectedComponents(swModel, selMgr, selCount)
+        If selectedCandidates Is Nothing Then
+            Err.Raise 5, "DXF selection", "Could not capture the complete selection. Select the components again; see the trace for details."
+        End If
+    End If
 
 
 
@@ -491,58 +622,14 @@ Private Sub ExcelsisMacroMain()
 
 
     Dim mode As Integer
-
-    mode = MODE_REGULAR
-
-    g_generalImportedFilter = False
-
-    Dim needPrompt As Boolean
-
-    needPrompt = False
-
-    If mType = swDocPART Then needPrompt = True
-
-    If mType = swDocASSEMBLY And selCount > 0 Then needPrompt = True
-
-
-
-    If needPrompt Then
-
-        mode = AskExportMode()
-
-        If mode = 0 Then Exit Sub
-
-        If mode = MODE_PRECUT Then
-
-            If Not AskPrecutSettings() Then Exit Sub
-
-            Debug.Print "Precut: offset=" & g_precutOffset_mm & "mm  keepFeats=" & g_precutKeepFeats
-
-        End If
-
-    ElseIf mType = swDocASSEMBLY Then
-
-        If Not AskFullAssemblyImportedFilter() Then Exit Sub
-
-    End If
-
-
-
     Dim assemblyExportMethod As Integer
-
-    assemblyExportMethod = ASSEMBLY_EXPORT_REGULAR
-
-    If mType = swDocASSEMBLY And mode = MODE_REGULAR Then
-
-        assemblyExportMethod = AskAssemblyExportMethod()
-
-        If assemblyExportMethod = 0 Then Exit Sub
-
+    If Not AskDxfRunOptions(mType, selCount, mode, assemblyExportMethod) Then
+        g_userCancelled = True
+        Exit Sub
     End If
-
-
 
     Debug.Print "Mode: " & IIf(mode = MODE_REGULAR, "REGULAR", "PRECUT")
+    BuildDxfNameInventory swModel
 
     Debug.Print "General imported filter: " & CStr(g_generalImportedFilter)
 
@@ -602,6 +689,10 @@ Private Sub ExcelsisMacroMain()
     Set dictOpened = CreateObject("Scripting.Dictionary")
 
     Set dictInitiallyVisibleDocumentWindows = BuildVisibleDocumentWindowKeyDict()
+    Set g_initiallyVisibleDocuments = dictInitiallyVisibleDocumentWindows
+    If mType = swDocASSEMBLY And g_initiallyVisibleDocuments Is Nothing Then
+        Err.Raise 5, "DXF cleanup", "Could not capture the original document windows; batch export was not started."
+    End If
 
     If mType = swDocPART Then
 
@@ -628,7 +719,7 @@ Private Sub ExcelsisMacroMain()
 
         End If
 
-        ProcessSelectedComponents swModel, selMgr, selCount, dxfFolder, mode, _
+        ProcessSelectedComponents swModel, selectedCandidates, dxfFolder, mode, _
                                   assemblyExportMethod, dictQty, dictDone, dictOpened
 
     Else
@@ -646,6 +737,8 @@ Private Sub ExcelsisMacroMain()
 
     TraceRun "export processing complete"
 
+    TraceCandidateSummary
+    RestoreOriginalConfigurations
     TraceRun "closing explicitly opened documents"
     CloseExplicitlyOpenedPartDocs dictOpened
 
@@ -656,12 +749,19 @@ Private Sub ExcelsisMacroMain()
     ActivateModelDocument swModel
 
 
+    If g_stopBatchReason <> "" Then Err.Raise 5, "DXF batch stopped", g_stopBatchReason
+
     Debug.Print "==== EXPORT COMPLETE ===="
 
-    TraceRun "complete exported-entries=" & CStr(dictDone.Count)
+    TraceRun "complete exported-entries=" & CStr(dictDone.Count - g_existingCount) & " existing-kept=" & CStr(g_existingCount)
 
-    MsgBox "DXF export done." & vbCrLf & _
-           "Exported entries: " & CStr(dictDone.Count) & vbCrLf & _
+    Dim completionText As String
+    completionText = "DXF export done."
+    If g_userCancelled Then completionText = "DXF export stopped by user. Completed files were kept."
+    MsgBox completionText & vbCrLf & _
+           "New exports: " & CStr(dictDone.Count - g_existingCount) & vbCrLf & _
+           "Existing DXFs kept: " & CStr(g_existingCount) & vbCrLf & _
+           "Folder: " & dxfFolder & vbCrLf & _
             "Trace: " & g_tracePath
 
     If dictDone.Count > 0 Then ExcelsisOpenExportFolder dxfFolder
@@ -714,109 +814,258 @@ End Function
 
 ' ================================================================
 
-Function AskExportMode() As Integer
-    g_generalImportedFilter = False
-
-    Dim dialogTitle As String
-    Dim mainInstruction As String
-    Dim content As String
-    Dim clickedButton As Long
-    Dim apiResult As Long
-
-    dialogTitle = "Export type"
-    mainInstruction = "Export as:"
-    content = "YES = Regular DXF" & vbCrLf & _
-              "NO = Crude precut (offset outline)" & vbCrLf & _
-              "RETRY = Regular DXF + general imported filter" & vbCrLf & _
-              "CANCEL = abort"
-
-    On Error Resume Next
-
-    apiResult = ExcelsisTaskDialog(0, 0, StrPtr(dialogTitle), _
-                                   StrPtr(mainInstruction), StrPtr(content), _
-                                   TDCBF_YES_BUTTON Or TDCBF_NO_BUTTON Or _
-                                   TDCBF_CANCEL_BUTTON Or TDCBF_RETRY_BUTTON, _
-                                   0, clickedButton)
-
-    If Err.Number = 0 And apiResult = 0 Then
-
-        On Error GoTo 0
-
-        Select Case clickedButton
-
-            Case DIALOG_ID_YES
-                AskExportMode = MODE_REGULAR
-
-            Case DIALOG_ID_NO
-                AskExportMode = MODE_PRECUT
-
-            Case DIALOG_ID_RETRY
-                g_generalImportedFilter = True
-                AskExportMode = MODE_REGULAR
-
-            Case Else
-                AskExportMode = 0
-
-        End Select
-
-        Exit Function
-
+Function AskDxfOutputOptions(docType As Long) As Boolean
+    Dim answer As VbMsgBoxResult
+    answer = MsgBox("Export only missing DXFs?" & vbCrLf & _
+        "YES = keep existing nonempty files (default)." & vbCrLf & _
+        "NO = regenerate all candidates." & vbCrLf & _
+        "To refresh a changed part in missing-only mode, remove its old DXF first.", _
+        vbYesNoCancel + vbQuestion, "Existing DXFs")
+    If answer = vbCancel Then Exit Function
+    g_missingOnly = (answer = vbYes)
+    g_assemblyFolders = False
+    If docType = swDocASSEMBLY Then
+        answer = MsgBox("Group DXFs into subfolders named after their parent assembly?" & vbCrLf & _
+            "YES = one folder per immediate parent assembly/configuration." & vbCrLf & _
+            "NO = the existing flat layout (default).", _
+            vbYesNoCancel + vbQuestion + vbDefaultButton2, "DXF folder layout")
+        If answer = vbCancel Then Exit Function
+        g_assemblyFolders = (answer = vbYes)
     End If
-
-    Err.Clear
-    On Error GoTo 0
-
-    Dim fallbackChoice As String
-
-    fallbackChoice = InputBox( _
-        "1 = Regular DXF" & vbCrLf & _
-        "2 = Crude precut (offset outline)" & vbCrLf & _
-        "3 = Regular DXF + general imported filter" & vbCrLf & _
-        "Blank = abort", "Export type", "1")
-
-    Select Case Trim$(fallbackChoice)
-
-        Case "1"
-            AskExportMode = MODE_REGULAR
-
-        Case "2"
-            AskExportMode = MODE_PRECUT
-
-        Case "3"
-            g_generalImportedFilter = True
-            AskExportMode = MODE_REGULAR
-
-        Case Else
-            AskExportMode = 0
-
-    End Select
-
+    TraceRun "output-options missing-only=" & CStr(g_missingOnly) & " assembly-folders=" & CStr(g_assemblyFolders)
+    AskDxfOutputOptions = True
 End Function
 
-Function AskFullAssemblyImportedFilter() As Boolean
+Function DxfOwnerIdentity(ByVal swComp As Object, ByVal swModel As Object) As String
+    Dim parent As Object, ownerPath As String, ownerCfg As String
+    On Error Resume Next
+    If Not swComp Is Nothing Then Set parent = swComp.GetParent
+    If Not parent Is Nothing Then
+        ownerPath = CStr(parent.GetPathName)
+        ownerCfg = CStr(parent.ReferencedConfiguration)
+    End If
+    If ownerPath = "" And Not swModel Is Nothing Then
+        ownerPath = CStr(swModel.GetPathName)
+        ownerCfg = GetActiveConfigName(swModel)
+    End If
+    If ownerPath = "" Then
+        ownerPath = g_runRootPath
+        ownerCfg = g_runRootConfiguration
+    End If
+    On Error GoTo 0
+    DxfOwnerIdentity = LCase$(ownerPath) & vbTab & ownerCfg
+End Function
+
+Function DxfCandidateScopeKey(ByVal partPath As String, ByVal cfg As String, ByVal swComp As Object, _
+                              ByVal swModel As Object, Optional ByVal forceParent As Boolean = False) As String
+    DxfCandidateScopeKey = LCase$(partPath) & "@" & cfg
+    If g_assemblyFolders Or forceParent Then _
+        DxfCandidateScopeKey = DxfCandidateScopeKey & vbTab & DxfOwnerIdentity(swComp, swModel)
+End Function
+
+Function DxfIdentityTag(ByVal value As String) As String
+    Dim h As Double, i As Long, c As Long
+    For i = 1 To Len(value)
+        c = AscW(Mid$(value, i, 1))
+        If c < 0 Then c = c + 65536
+        h = h * 131# + CDbl(c)
+        h = h - Fix(h / 2147483629#) * 2147483629#
+    Next i
+    DxfIdentityTag = Right$("00000000" & Hex$(CLng(h)), 8)
+End Function
+
+Function DxfPartNameKey(ByVal partPath As String, ByVal cfg As String) As String
+    Dim name As String
+    name = TraceFileLabel(partPath)
+    If InStrRev(name, ".") > 0 Then name = Left$(name, InStrRev(name, ".") - 1)
+    DxfPartNameKey = LCase$(CleanFileName(name) & vbTab & CleanFileName(cfg))
+End Function
+
+Function DxfAssemblyFolderStem(ByVal owner As String) As String
+    Dim fields As Variant, name As String
+    fields = Split(owner, vbTab)
+    name = TraceFileLabel(CStr(fields(0)))
+    If InStrRev(name, ".") > 0 Then name = Left$(name, InStrRev(name, ".") - 1)
+    If UBound(fields) > 0 Then
+        If CStr(fields(1)) <> "" And LCase$(CStr(fields(1))) <> "default" Then name = name & " (" & CStr(fields(1)) & ")"
+    End If
+    name = CleanFileName(name)
+    Do While Len(name) > 0
+        If Right$(name, 1) <> "." And Right$(name, 1) <> " " Then Exit Do
+        name = Left$(name, Len(name) - 1)
+    Loop
+    If name = "" Then name = "Assembly"
+    fields = Split(name, ".")
+    Select Case UCase$(CStr(fields(0)))
+        Case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", _
+             "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+            name = "_" & name
+    End Select
+    If Len(name) > 100 Then name = Left$(name, 90) & "_" & DxfIdentityTag(owner)
+    DxfAssemblyFolderStem = name
+End Function
+
+Sub RegisterDxfNameOwner(ByVal owners As Object, ByVal key As String, ByVal owner As String)
+    If owners.Exists(key) Then
+        If CStr(owners(key)) <> owner Then owners(key) = "*"
+    Else
+        owners.Add key, owner
+    End If
+End Sub
+
+Sub BuildDxfNameInventory(swModel As Object)
+    Dim components As Variant, c As Object, item As Variant, p As String, cfg As String, owner As String
+    On Error GoTo UnknownInventory
+    If swModel.GetType = swDocPART Then
+        RegisterDxfNameOwner g_partNameOwners, DxfPartNameKey(swModel.GetPathName, GetActiveConfigName(swModel)), LCase$(swModel.GetPathName) & vbTab & GetActiveConfigName(swModel)
+        Exit Sub
+    End If
+    owner = DxfOwnerIdentity(Nothing, swModel)
+    RegisterDxfNameOwner g_folderNameOwners, LCase$(DxfAssemblyFolderStem(owner)), owner
+    components = swModel.GetComponents(False)
+    If IsEmpty(components) Then Exit Sub
+    For Each item In components
+        Set c = item
+        p = CStr(c.GetPathName): cfg = CStr(c.ReferencedConfiguration)
+        If IsPartPath(p) Then
+            RegisterDxfNameOwner g_partNameOwners, DxfPartNameKey(p, cfg), LCase$(p) & vbTab & cfg
+            owner = DxfOwnerIdentity(c, swModel)
+            RegisterDxfNameOwner g_folderNameOwners, LCase$(DxfAssemblyFolderStem(owner)), owner
+        End If
+    Next item
+    Exit Sub
+UnknownInventory:
+    g_forceIdentityTags = True
+    TraceRun "output-name inventory incomplete; using stable identity suffixes"
+End Sub
+
+Function CandidateExportFolder(ByVal rootFolder As String, ByVal swModel As Object, ByVal swComp As Object) As String
+    Dim owner As String, name As String
+    CandidateExportFolder = rootFolder
+    If Not g_assemblyFolders Then Exit Function
+    owner = DxfOwnerIdentity(swComp, swModel)
+    name = DxfAssemblyFolderStem(owner)
+    If g_forceIdentityTags Then
+        name = name & "_" & DxfIdentityTag(owner)
+    ElseIf g_folderNameOwners.Exists(LCase$(name)) Then
+        If CStr(g_folderNameOwners(LCase$(name))) = "*" Then name = name & "_" & DxfIdentityTag(owner)
+    End If
+    CandidateExportFolder = EnsureSubFolder(rootFolder, name)
+End Function
+
+Function KeepExistingDxf(ByVal filePath As String) As Boolean
+    Dim fso As Object
+    If Not g_missingOnly Then Exit Function
+    On Error GoTo Failed
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(filePath) Then Exit Function
+    If CDbl(fso.GetFile(filePath).Size) <= 0# Then
+        TraceRun "output existing-empty=regenerate path=" & DiagnosticLineValue(filePath)
+        Exit Function
+    End If
+    g_candidateExisting = True
+    g_existingCount = g_existingCount + 1
+    KeepExistingDxf = True
+    TraceRun "output skipped=existing-nonempty path=" & DiagnosticLineValue(filePath)
+    Exit Function
+Failed:
+    ' Never fall through to overwriting a file whose existence could not be checked.
+    Err.Raise 5, "DXF existing-file check", "Could not safely inspect output: " & filePath
+End Function
+
+Function NormalizeVisiblePartScopes(visibleParts As Object) As Object
+    Dim result As Object, k As Variant, candidate As Variant, prior As Variant, key As String
+    Set result = CreateObject("Scripting.Dictionary")
+    For Each k In visibleParts.Keys
+        candidate = visibleParts(k)
+        key = DxfCandidateScopeKey(CStr(candidate(0)), CStr(candidate(1)), candidate(4), Nothing)
+        If result.Exists(key) Then
+            prior = result(key)
+            prior(2) = CLng(prior(2)) + CLng(candidate(2))
+            If CStr(prior(3)) = "" Then prior(3) = candidate(3)
+            result(key) = prior
+        Else
+            result.Add key, candidate
+        End If
+    Next k
+    Set NormalizeVisiblePartScopes = result
+End Function
+
+Function DxfStopRequested() As Boolean
+    Dim foregroundPid As Long
+    If g_userCancelled Then
+        DxfStopRequested = True
+        Exit Function
+    End If
+    On Error GoTo Done
+    ' Poll only at safe checkpoints; never interrupt a native SOLIDWORKS call.
+    If DxfGetAsyncKeyState(&H12) < 0 And DxfGetAsyncKeyState(&H53) < 0 And _
+       DxfGetAsyncKeyState(&H11) >= 0 Then
+        DxfGetWindowThreadProcessId DxfGetForegroundWindow(), foregroundPid
+        If foregroundPid = ExcelsisGetCurrentProcessId() Then
+            g_userCancelled = True
+            TraceRun "cancel requested=Alt+S; finishing owned-document cleanup"
+        End If
+    End If
+Done:
+    DxfStopRequested = g_userCancelled
+End Function
+
+Function AskExportMode() As Integer
     Dim r As VbMsgBoxResult
-
-    r = MsgBox("Imported geometry filtering:" & vbCrLf & vbCrLf & _
-               "YES = General filter: skip all imported candidates" & vbCrLf & _
-               "NO = Default: skip imported washer-like candidates only" & vbCrLf & _
-               "CANCEL = abort", _
-               vbYesNoCancel + vbQuestion, "Assembly export")
-
+    r = MsgBox("Export as:" & vbCrLf & vbCrLf & _
+               "YES = Regular DXF" & vbCrLf & _
+               "NO = Crude precut (offset outline)" & vbCrLf & _
+               "CANCEL = abort", vbYesNoCancel + vbQuestion, "Export type")
     Select Case r
+        Case vbYes
+            AskExportMode = MODE_REGULAR
+        Case vbNo
+            AskExportMode = MODE_PRECUT
+    End Select
+End Function
 
+Function AskDxfRunOptions(docType As Long, selectionCount As Long, _
+                          ByRef mode As Integer, ByRef assemblyExportMethod As Integer) As Boolean
+    mode = MODE_REGULAR
+    assemblyExportMethod = ASSEMBLY_EXPORT_REGULAR
+    g_generalImportedFilter = False
+    If docType = swDocPART Or (docType = swDocASSEMBLY And selectionCount > 0) Then
+        mode = AskExportMode()
+        If mode = 0 Then Exit Function
+    End If
+    If Not AskImportedFilter() Then Exit Function
+    If Not AskDxfOutputOptions(docType) Then Exit Function
+    If mode = MODE_PRECUT Then
+        If Not AskPrecutSettings() Then Exit Function
+    ElseIf docType = swDocASSEMBLY Then
+        assemblyExportMethod = AskAssemblyExportMethod()
+        If assemblyExportMethod = 0 Then Exit Function
+    End If
+    AskDxfRunOptions = True
+End Function
+
+Function AskImportedFilter() As Boolean
+    Dim r As VbMsgBoxResult
+    TraceRun "import-filter prompt shown"
+    r = MsgBox("Which imported parts should be excluded?" & vbCrLf & vbCrLf & _
+               "YES = Exclude ALL imported parts" & vbCrLf & _
+               "NO = Exclude imported washer-like parts ONLY (default)" & vbCrLf & _
+               "CANCEL = abort" & vbCrLf & vbCrLf & _
+               "During export: hold Alt+S to stop after the current operation.", _
+               vbYesNoCancel + vbQuestion + vbDefaultButton2, "Imported parts filter")
+    Select Case r
         Case vbYes
             g_generalImportedFilter = True
-            AskFullAssemblyImportedFilter = True
-
+            AskImportedFilter = True
+            TraceRun "import-filter choice=all-imported"
         Case vbNo
             g_generalImportedFilter = False
-            AskFullAssemblyImportedFilter = True
-
+            AskImportedFilter = True
+            TraceRun "import-filter choice=washerlike-only"
         Case Else
-            AskFullAssemblyImportedFilter = False
-
+            TraceRun "import-filter choice=cancel"
     End Select
-
 End Function
 
 Function GetDocumentActivationName(swModel As Object) As String
@@ -954,8 +1203,14 @@ Function ActivateConfigurationChecked(swModel As Object, cfg As String) As Boole
 
     End If
 
-    If cfg = "" Or _
-       StrComp(GetActiveConfigName(swModel), cfg, vbTextCompare) = 0 Then
+    If cfg = "" Then
+        TraceRun "configuration reject=empty-request"
+        Exit Function
+    End If
+    RememberOriginalConfiguration swModel
+    TraceRun "configuration requested=" & DiagnosticLineValue(cfg) & _
+             " current=" & DiagnosticLineValue(GetActiveConfigName(swModel))
+    If StrComp(GetActiveConfigName(swModel), cfg, vbTextCompare) = 0 Then
 
         ActivateConfigurationChecked = True
 
@@ -993,6 +1248,37 @@ Function ActivateConfigurationChecked(swModel As Object, cfg As String) As Boole
     End If
 
 End Function
+
+Sub RememberOriginalConfiguration(swModel As Object)
+    Dim key As String, cfg As String
+    If swModel Is Nothing Then Exit Sub
+    If g_originalConfigurations Is Nothing Then Set g_originalConfigurations = CreateObject("Scripting.Dictionary")
+    key = LCase$(swModel.GetPathName)
+    If key = "" Then Exit Sub
+    If g_originalConfigurations.Exists(key) Then Exit Sub
+    cfg = GetActiveConfigName(swModel)
+    g_originalConfigurations.Add key, cfg
+End Sub
+
+Sub RestoreOriginalConfigurations()
+    Dim key As Variant, model As Object, cfg As String
+    If g_originalConfigurations Is Nothing Then Exit Sub
+    On Error Resume Next
+    For Each key In g_originalConfigurations.Keys
+        Set model = Nothing
+        Set model = swApp.GetOpenDocumentByName(CStr(key))
+        cfg = CStr(g_originalConfigurations(key))
+        If Not model Is Nothing And cfg <> "" Then
+            Err.Clear
+            If StrComp(GetActiveConfigName(model), cfg, vbTextCompare) <> 0 Then
+                If Not ActivateConfigurationChecked(model, cfg) Then _
+                    TraceRun "configuration restore-failed path=" & CStr(key) & " requested=" & cfg
+            End If
+            If Err.Number <> 0 Then TraceRun "configuration restore-error path=" & CStr(key) & " error=" & CStr(Err.Number)
+        End If
+    Next key
+    On Error GoTo 0
+End Sub
 
 Function AskAssemblyExportMethod() As Integer
 
@@ -1339,7 +1625,7 @@ Function BuildQtyDict(swModel As Object) As Object
                 If Not IsPartPath(p) And Not IsAssemblyPath(p) Then GoTo NextQtyComp
 
                 Dim k As String
-                k = LCase(p) & "@" & c.ReferencedConfiguration
+                k = DxfCandidateScopeKey(p, c.ReferencedConfiguration, c, swModel)
                 If d.Exists(k) Then
 
                     d(k) = d(k) + 1
@@ -1408,7 +1694,7 @@ Function BuildAssemblyContextQtyDict(swModel As Object) As Object
 
         Dim fullKey As String
 
-        fullKey = LCase(partPath) & "@" & swComp.ReferencedConfiguration
+        fullKey = DxfCandidateScopeKey(partPath, swComp.ReferencedConfiguration, swComp, swModel)
 
         If d.Exists(fullKey) Then
 
@@ -1862,59 +2148,202 @@ NextDoc:
 End Sub
 
 Sub CloseExplicitlyOpenedPartDocs(dictOpened As Object)
-
+    Dim key As Variant, model As Object
     If dictOpened Is Nothing Then Exit Sub
-
-    Dim k As Variant
-
-    For Each k In dictOpened.Keys
-
-        Debug.Print "  Closing explicitly opened part: " & dictOpened(k)
-
+    For Each key In dictOpened.Keys
+        Set model = Nothing
         On Error Resume Next
-
-        swApp.CloseDoc CStr(dictOpened(k))
-
+        Set model = swApp.GetOpenDocumentByName(CStr(key))
         On Error GoTo 0
-
-    Next k
-
+        If Not CloseCandidateDocument(CStr(key), model, dictOpened) Then Exit For
+    Next key
 End Sub
 
-Sub ClosePartOpenedForCandidate(partPath As String, ByRef swPart As Object, _
-                                dictOpened As Object)
-
-    If dictOpened Is Nothing Then Exit Sub
-
-    Dim openedKey As String
-
-    openedKey = LCase(partPath)
-
-    If openedKey = "" Then Exit Sub
-    If Not dictOpened.Exists(openedKey) Then Exit Sub
-
-    Dim closeName As String
-
-    closeName = CStr(dictOpened(openedKey))
-
+Function CloseCandidateDocument(partPath As String, ByRef swPart As Object, _
+                                dictOpened As Object) As Boolean
+    Dim key As String, closeName As String, snapshotOk As Boolean
+    Dim windows As Collection, model As Object, i As Long
+    On Error GoTo Failed
+    key = LCase$(partPath)
+    If dictOpened Is Nothing Then Exit Function
+    If key = "" Then Exit Function
+    If Not dictOpened.Exists(key) Then
+        CloseCandidateDocument = True
+        Exit Function
+    End If
+    If Not swPart Is Nothing Then
+        If VisibleDocumentSnapshotContains(g_initiallyVisibleDocuments, swPart) Then
+            dictOpened.Remove key
+            TraceRun "cleanup preserved protected document=" & DiagnosticLineValue(partPath)
+            CloseCandidateDocument = True
+            Exit Function
+        End If
+    End If
+    closeName = CStr(dictOpened(key))
+    If closeName = "" Or StrComp(closeName, partPath, vbTextCompare) <> 0 Then _
+        Err.Raise 5, "DXF cleanup", "Candidate close identity is not the expected full path."
+    TraceRun "cleanup close-request path=" & DiagnosticLineValue(partPath)
     Set swPart = Nothing
-
-    On Error Resume Next
-
     swApp.CloseDoc closeName
-    dictOpened.Remove openedKey
-
-    On Error GoTo 0
-
-    TraceRun "closed candidate part=" & TraceFileLabel(partPath)
-
+    Set windows = GetModelWindowDocuments(snapshotOk)
+    If Not snapshotOk Or windows Is Nothing Then _
+        Err.Raise 5, "DXF cleanup", "Could not verify candidate window closure."
+    For i = 1 To windows.Count
+        Set model = windows(i)
+        If StrComp(CStr(model.GetPathName), partPath, vbTextCompare) = 0 Then _
+            Err.Raise 5, "DXF cleanup", "SOLIDWORKS kept the candidate window open."
+    Next i
+    dictOpened.Remove key
+    If Not g_originalConfigurations Is Nothing Then
+        If g_originalConfigurations.Exists(key) Then g_originalConfigurations.Remove key
+    End If
+    TraceRun "cleanup closed candidate path=" & DiagnosticLineValue(partPath) & _
+             " pending-owned=" & CStr(dictOpened.Count)
+    CloseCandidateDocument = True
+    Set model = Nothing
+    Set windows = Nothing
     DoEvents
+    Exit Function
+Failed:
+    If g_stopBatchReason = "" Then g_stopBatchReason = _
+        "Could not safely close a macro-opened document. Batch stopped to avoid accumulating windows: " & partPath
+    TraceRun "cleanup reject=close-failed number=" & CStr(Err.Number) & _
+             " description=" & DiagnosticLineValue(Err.Description) & " path=" & DiagnosticLineValue(partPath)
+End Function
 
+Sub PreserveCandidateDocument(swModel As Object, reason As String)
+    Dim key As String
+    On Error Resume Next
+    If swModel Is Nothing Or g_initiallyVisibleDocuments Is Nothing Then Exit Sub
+    key = GetDocumentWindowKey(swModel)
+    If key <> "" Then
+        If Not g_initiallyVisibleDocuments.Exists(key) Then _
+            g_initiallyVisibleDocuments.Add key, True
+    End If
+    TraceRun "cleanup preserve=" & reason & " path=" & DiagnosticLineValue(swModel.GetPathName)
+    On Error GoTo 0
+End Sub
+
+Sub TrackCandidateDocument(swModel As Object, wasLoaded As Boolean, dictOpened As Object)
+    Dim partPath As String, key As String
+    On Error GoTo UnknownOwnership
+    partPath = CStr(swModel.GetPathName)
+    key = LCase$(partPath)
+    If key = "" Or g_initiallyVisibleDocuments Is Nothing Then GoTo UnknownOwnership
+    If VisibleDocumentSnapshotContains(g_initiallyVisibleDocuments, swModel) Then Exit Sub
+    If g_candidateOwnership Is Nothing Then Set g_candidateOwnership = CreateObject("Scripting.Dictionary")
+    If Not g_candidateOwnership.Exists(key) Then
+        If wasLoaded Then
+            If swModel.GetSaveFlag Then
+                PreserveCandidateDocument swModel, "pre-existing-unsaved-document"
+                Exit Sub
+            End If
+        End If
+        g_candidateOwnership.Add key, True
+    End If
+    If Not dictOpened.Exists(key) Then dictOpened.Add key, partPath
+    TraceRun "cleanup acquired path=" & DiagnosticLineValue(partPath) & _
+             " already-loaded=" & CStr(wasLoaded) & " pending-owned=" & CStr(dictOpened.Count)
+    Exit Sub
+UnknownOwnership:
+    PreserveCandidateDocument swModel, "unknown-ownership"
+    If g_stopBatchReason = "" Then g_stopBatchReason = _
+        "Could not determine safe document ownership. Batch stopped before further exports."
+    TraceRun "cleanup reject=ownership-unknown path=" & DiagnosticLineValue(partPath)
 End Sub
 
 ' ================================================================
 
-Sub ProcessSelectedComponents(swModel As Object, selMgr As Object, selCount As Long, _
+Function SnapshotSelectedComponents(swModel As Object, selMgr As Object, selCount As Long) As Collection
+    Dim captured As New Collection, result As New Collection
+    Dim scopes As Object
+    Set scopes = CreateObject("Scripting.Dictionary")
+    Dim s As Long, selType As Long, selObj As Object, swComp As Object
+    Dim partPath As String, cfg As String, record As Variant, key As String
+    Dim visibleParts As Object, errorNumber As Long, errorText As String
+    On Error GoTo Failed
+    TraceRun "selection-snapshot requested=" & CStr(selCount)
+    If selMgr.GetSelectedObjectCount2(-1) <> selCount Then _
+        Err.Raise 5, "DXF selection", "Selection changed before it could be captured."
+
+    ' Read the whole live selection before opening, resolving or rebuilding anything.
+    For s = 1 To selCount
+        g_traceComponent = ""
+        Set selObj = selMgr.GetSelectedObject6(s, -1)
+        selType = selMgr.GetSelectedObjectType3(s, -1)
+        Set swComp = Nothing
+        On Error Resume Next
+        Set swComp = selMgr.GetSelectedObjectsComponent4(s, -1)
+        If swComp Is Nothing Then Set swComp = selMgr.GetSelectedObjectsComponent4(s, 0)
+        If swComp Is Nothing And Not selObj Is Nothing Then Set swComp = selObj.GetComponent
+        On Error GoTo Failed
+        If swComp Is Nothing And selType = 20 Then Set swComp = selObj
+        If swComp Is Nothing Then
+            TraceRun "selection-snapshot skip=no-component index=" & CStr(s) & " type=" & CStr(selType)
+            GoTo NextSelection
+        End If
+        partPath = CStr(swComp.GetPathName)
+        cfg = CStr(swComp.ReferencedConfiguration)
+        g_traceComponent = TraceFileLabel(partPath) & "@" & cfg
+        If IsComponentActuallySuppressedSafe(swComp) Then
+            TraceRun "selection-snapshot skip=suppressed index=" & CStr(s)
+            GoTo NextSelection
+        End If
+        If IsComponentHiddenSafe(swComp) Or ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then
+            TraceRun "selection-snapshot skip=hidden-or-excluded-ancestor index=" & CStr(s)
+            GoTo NextSelection
+        End If
+        If partPath = "" Or cfg = "" Then
+            TraceRun "selection-snapshot skip=missing-path-or-configuration index=" & CStr(s)
+            GoTo NextSelection
+        End If
+        If Not IsPartPath(partPath) And Not IsAssemblyPath(partPath) Then
+            TraceRun "selection-snapshot skip=unsupported-document index=" & CStr(s)
+            GoTo NextSelection
+        End If
+        record = Array(s, selType, Nothing, Nothing, partPath, cfg, Nothing)
+        Set record(2) = selObj
+        Set record(3) = swComp
+        captured.Add record
+        TraceRun "selection-snapshot captured index=" & CStr(s) & " type=" & CStr(selType) & _
+                 " path=" & DiagnosticLineValue(partPath) & " cfg=" & cfg
+NextSelection:
+    Next s
+    If selMgr.GetSelectedObjectCount2(-1) <> selCount Then _
+        Err.Raise 5, "DXF selection", "Selection changed while it was being captured."
+
+    ' Freeze subassembly visibility too; reopening may show a different display state.
+    For Each record In captured
+        partPath = CStr(record(4))
+        cfg = CStr(record(5))
+        If IsAssemblyPath(partPath) Then
+            key = LCase(partPath) & "@" & cfg
+            If scopes.Exists(key) Then
+                Set visibleParts = scopes(key)
+            Else
+                Set visibleParts = BuildVisibleSubassemblyPartCandidates(swModel, partPath, cfg)
+                scopes.Add key, visibleParts
+            End If
+            Set record(6) = visibleParts
+            TraceRun "selection-snapshot subassembly index=" & CStr(record(0)) & _
+                     " candidates=" & CStr(visibleParts.Count) & " path=" & DiagnosticLineValue(partPath)
+        End If
+        result.Add record
+    Next record
+    g_traceComponent = ""
+    TraceRun "selection-snapshot complete requested=" & CStr(selCount) & _
+             " captured=" & CStr(result.Count) & " skipped=" & CStr(selCount - result.Count)
+    Set SnapshotSelectedComponents = result
+    Exit Function
+Failed:
+    errorNumber = Err.Number
+    errorText = Err.Description
+    TraceRun "selection-snapshot reject=incomplete index=" & CStr(s) & _
+             " error=" & CStr(errorNumber) & " description=" & DiagnosticLineValue(errorText)
+    Set SnapshotSelectedComponents = Nothing
+End Function
+
+Sub ProcessSelectedComponents(swModel As Object, selectedCandidates As Collection, _
                               dxfFolder As String, mode As Integer, _
                               assemblyExportMethod As Integer, dictQty As Object, _
                               dictDone As Object, dictOpened As Object)
@@ -1931,136 +2360,30 @@ Sub ProcessSelectedComponents(swModel As Object, selMgr As Object, selCount As L
 
     Set dictSelectedAssemblyKeys = CreateObject("Scripting.Dictionary")
 
-    Dim s As Long
-
-    For s = 1 To selCount
-
-        g_traceComponent = ""
-
-        Debug.Print "  --- Sel " & s & " ---"
-
-
-
-        Dim selObj As Object
-
-        Set selObj = Nothing
-
-        Dim selType As Long
-
-        selType = -1
-
-        On Error Resume Next
-
-        Set selObj = selMgr.GetSelectedObject6(s, -1)
-
-        selType = selMgr.GetSelectedObjectType3(s, -1)
-
-        On Error GoTo 0
-
-        Debug.Print "    SelType=" & selType
-
-
-
-        Dim swComp As Object
-
-        Set swComp = Nothing
-
-
-
-        On Error Resume Next
-
-        Set swComp = selMgr.GetSelectedObjectsComponent4(s, -1)
-
-        On Error GoTo 0
-
-        If Not swComp Is Nothing Then
-
-            Debug.Print "    via Comp4(-1)"
-
-            GoTo HaveComp
-
-        End If
-
-
-
-        On Error Resume Next
-
-        Set swComp = selMgr.GetSelectedObjectsComponent4(s, 0)
-
-        On Error GoTo 0
-
-        If Not swComp Is Nothing Then
-
-            Debug.Print "    via Comp4(0)"
-
-            GoTo HaveComp
-
-        End If
-
-
-
-        If Not selObj Is Nothing Then
-
-            On Error Resume Next
-
-            Set swComp = selObj.GetComponent
-
-            On Error GoTo 0
-
-            If Not swComp Is Nothing Then
-
-                Debug.Print "    via GetComponent"
-
-                GoTo HaveComp
-
-            End If
-
-        End If
-
-
-
-        If selType = 20 Then
-
-            Set swComp = selObj
-
-            If Not swComp Is Nothing Then
-
-                Debug.Print "    sel IS comp"
-
-                GoTo HaveComp
-
-            End If
-
-        End If
-
-
-
-        Debug.Print "    No component, skip"
-
-        GoTo NextSel
-
-
-
-HaveComp:
-
-        If IsComponentActuallySuppressedSafe(swComp) Then GoTo NextSel
-        If ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then GoTo NextSel
-
-        If IsComponentHiddenSafe(swComp) Then
-            Debug.Print "    Component hidden, skip"
+    Dim s As Long, visited As Long, selectedCandidate As Variant
+    Dim selObj As Object, selType As Long, swComp As Object
+    Dim partPath As String, cfg As String
+    TraceRun "selected-queue start captured=" & CStr(selectedCandidates.Count)
+    For Each selectedCandidate In selectedCandidates
+        If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit For
+        visited = visited + 1
+        s = CLng(selectedCandidate(0))
+        selType = CLng(selectedCandidate(1))
+        Set selObj = selectedCandidate(2)
+        Set swComp = selectedCandidate(3)
+        partPath = CStr(selectedCandidate(4))
+        cfg = CStr(selectedCandidate(5))
+        g_traceComponent = TraceFileLabel(partPath) & "@" & cfg
+        If IsComponentActuallySuppressedSafe(swComp) Or IsComponentHiddenSafe(swComp) Or _
+           ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then
+            TraceRun "selected reject=component-state-changed index=" & CStr(s)
             GoTo NextSel
         End If
-
-        Dim partPath As String
-
-        partPath = swComp.GetPathName
-
-        Dim cfg As String
-
-        cfg = swComp.ReferencedConfiguration
-
-        g_traceComponent = TraceFileLabel(partPath) & "@" & cfg
-
+        If StrComp(CStr(swComp.GetPathName), partPath, vbTextCompare) <> 0 Or _
+           StrComp(CStr(swComp.ReferencedConfiguration), cfg, vbTextCompare) <> 0 Then
+            TraceRun "selected reject=component-identity-changed index=" & CStr(s)
+            GoTo NextSel
+        End If
         TraceRun "selected candidate index=" & CStr(s) & _
                  " type=" & CStr(selType) & _
                  " component=" & g_traceComponent
@@ -2079,7 +2402,7 @@ HaveComp:
                 dictSelectedAssemblyKeys.Add assemblyKey, True
 
                 Dim visibleParts As Object
-                Set visibleParts = BuildVisibleSubassemblyPartCandidates(swModel, partPath, cfg)
+                Set visibleParts = selectedCandidate(6)
 
                 If mode = MODE_REGULAR And _
                    assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
@@ -2106,7 +2429,7 @@ HaveComp:
         End If
 
         Dim fullKey As String
-        fullKey = LCase(partPath) & "@" & cfg
+        fullKey = DxfCandidateScopeKey(partPath, cfg, swComp, swModel)
 
         If dictDone.Exists(fullKey) Then
 
@@ -2130,64 +2453,33 @@ HaveComp:
 
         End If
 
-        ResolveSelectedPartIfLightweight swComp
-
-
-
-        Debug.Print "    " & partPath & " @ " & cfg & " qty=" & qty
-
-
-
-        Dim swPart As Object
-
-        Set swPart = OpenPartForExport(partPath, dictOpened)
-
-        If swPart Is Nothing Then
-
-            TraceRun "selected reject=open-part-failed component=" & g_traceComponent
-
-            GoTo NextSel
-
-        End If
-
-
-
+        BeginDxfCandidate partPath, cfg, "selected-component"
         Dim exported As Boolean
-
-        If mode = MODE_REGULAR And _
-           assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
-
-            Dim selectedFace As Object
-
-            Set selectedFace = Nothing
-
-            If Not selObj Is Nothing Then
-
-                If IsPlanarFace(selObj) Then Set selectedFace = selObj
-
-            End If
-
-            If Not selectedFace Is Nothing Then _
-                TraceRun "selected planar-face override component=" & g_traceComponent
-
-            exported = ExportOnePartInAssemblyContext( _
-                swModel, swComp, swPart, partPath, cfg, qty, dxfFolder, selectedFace)
-
-        ElseIf ActivateConfigurationChecked(swPart, cfg) Then
-
-            exported = ExportOnePart(swPart, partPath, cfg, qty, dxfFolder, mode, Nothing)
-
+        exported = False
+        Dim selectedFace As Object
+        Set selectedFace = Nothing
+        Dim useContext As Boolean
+        useContext = (mode = MODE_REGULAR And assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT)
+        If useContext And Not selObj Is Nothing Then
+            If IsPlanarFace(selObj) Then Set selectedFace = selObj
         End If
+        If Not selectedFace Is Nothing Then _
+            TraceRun "selected planar-face override component=" & g_traceComponent
+        exported = ExportAssemblyCandidate(swModel, swComp, partPath, cfg, qty, dxfFolder, _
+                                           useContext, dictOpened, mode, selectedFace)
 
         TraceRun "selected result component=" & g_traceComponent & _
                  " exported=" & CStr(exported)
 
         If exported Then dictDone.Add fullKey, True
+        FinishDxfCandidate exported
 
 NextSel:
+        Set g_importComponent = Nothing
+    Next selectedCandidate
+    TraceRun "selected-queue complete captured=" & CStr(selectedCandidates.Count) & " visited=" & CStr(visited)
 
-    Next s
-
+    If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit Sub
     If mode = MODE_REGULAR And _
        assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
 
@@ -2196,7 +2488,7 @@ NextSel:
 
     Else
 
-        ExportSelectedSubassemblyParts dictSelectedAssemblyParts, dxfFolder, mode, _
+        ExportSelectedSubassemblyParts swModel, dictSelectedAssemblyParts, dxfFolder, mode, _
                                        dictDone, dictOpened
 
     End If
@@ -2254,6 +2546,7 @@ Sub ExportSelectedSubassembliesInContext(dictContexts As Object, dxfFolder As St
     Dim contextKey As Variant
 
     For Each contextKey In dictContexts.Keys
+        If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit For
 
         Dim contextInfo As Variant
 
@@ -2274,270 +2567,75 @@ End Sub
 Sub ProcessSelectedSubassemblyContext(assemblyPath As String, cfg As String, _
                                       visibleParts As Object, dxfFolder As String, _
                                       dictDone As Object, dictOpened As Object)
-
-    If Not IsAssemblyPath(assemblyPath) Then Exit Sub
-
-    Dim originalActiveDoc As Object
-
+    Dim originalActiveDoc As Object, swAssembly As Object, originalCfg As String
+    Dim wasLoaded As Boolean, errs As Long, warns As Long, restoreOk As Boolean
+    If Not IsAssemblyPath(assemblyPath) Or DxfStopRequested() Or g_stopBatchReason <> "" Then Exit Sub
+    On Error GoTo Failed
     Set originalActiveDoc = swApp.ActiveDoc
-
-    Dim swAssembly As Object
-
-    Dim openedHere As Boolean
-
     Set swAssembly = swApp.GetOpenDocumentByName(assemblyPath)
-
+    wasLoaded = Not swAssembly Is Nothing
+    If swAssembly Is Nothing Then _
+        Set swAssembly = swApp.OpenDoc6(assemblyPath, swDocASSEMBLY, swOpenDocOptions_Silent, cfg, errs, warns)
     If swAssembly Is Nothing Then
-
-        Dim errs As Long
-
-        Dim warns As Long
-
-        Set swAssembly = swApp.OpenDoc6(assemblyPath, swDocASSEMBLY, _
-                                       swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, _
-                                       cfg, errs, warns)
-
-        openedHere = Not swAssembly Is Nothing
-
+        TraceRun "subassembly reject=open-failed path=" & DiagnosticLineValue(assemblyPath)
+        GoTo CleanUp
     End If
-
-    If swAssembly Is Nothing Then
-
-        Debug.Print "    Could not open selected subassembly context: " & assemblyPath
-
-        GoTo RestoreActiveDocument
-
-    End If
-
-    If swAssembly.GetType <> swDocASSEMBLY Then GoTo CleanUpAssemblyContext
-
-    If Not ActivateModelDocument(swAssembly) Then GoTo CleanUpAssemblyContext
-
-    Dim originalCfg As String
-
+    TrackCandidateDocument swAssembly, wasLoaded, dictOpened
     originalCfg = GetActiveConfigName(swAssembly)
-
-    If Not ActivateConfigurationChecked(swAssembly, cfg) Then _
-        GoTo CleanUpAssemblyContext
-
+    If DxfStopRequested() Or g_stopBatchReason <> "" Then GoTo CleanUp
+    If swAssembly.GetType <> swDocASSEMBLY Or originalCfg = "" Then GoTo CleanUp
+    If Not ActivateModelDocument(swAssembly) Then GoTo CleanUp
+    If Not ActivateConfigurationChecked(swAssembly, cfg) Then GoTo CleanUp
     swAssembly.EditRebuild3
-
-Dim components As Variant
-
-    components = swAssembly.GetComponents(False)
-
-    If IsEmpty(components) Then GoTo CleanUpAssemblyContext
-
-    Dim i As Long
-
-    For i = 0 To UBound(components)
-
-        Dim swComp As Object
-
-        Set swComp = components(i)
-
-        If swComp Is Nothing Then GoTo NextContextComponent
-
-        If IsComponentActuallySuppressedSafe(swComp) Then GoTo NextContextComponent
-
-        If IsComponentHiddenSafe(swComp) Then GoTo NextContextComponent
-
-        If ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then _
-            GoTo NextContextComponent
-
-        Dim partPath As String
-
-        partPath = swComp.GetPathName
-
-        If Not IsPartPath(partPath) Then GoTo NextContextComponent
-
-        Dim partCfg As String
-
-        partCfg = swComp.ReferencedConfiguration
-
-        Dim fullKey As String
-
-        fullKey = LCase(partPath) & "@" & partCfg
-
-        If dictDone.Exists(fullKey) Then GoTo NextContextComponent
-        If Not visibleParts.Exists(fullKey) Then GoTo NextContextComponent
-
-        Dim swPart As Object
-
-        Set swPart = swComp.GetModelDoc2
-
-        If swPart Is Nothing Then Set swPart = OpenPartForExport(partPath, dictOpened)
-
-        If swPart Is Nothing Then GoTo NextContextComponent
-
-        If swPart.GetType <> swDocPART Then GoTo NextContextComponent
-
-        If IsToolboxPartSafe(swPart) Then GoTo NextContextComponent
-
-        Dim qty As Long
-
-        Dim candidate As Variant
-        candidate = visibleParts(fullKey)
-        qty = CLng(candidate(2))
-
-        Dim noPreferredFace As Object
-
-        Set noPreferredFace = Nothing
-
-        Dim exported As Boolean
-
-        exported = ExportOnePartInAssemblyContext( _
-            swAssembly, swComp, swPart, partPath, partCfg, qty, dxfFolder, _
-            noPreferredFace)
-
-        If exported Then dictDone.Add fullKey, True
-
-NextContextComponent:
-
-    Next i
-
-CleanUpAssemblyContext:
-
-    If Not swAssembly Is Nothing Then
-
-        If Not openedHere And originalCfg <> "" And _
-           StrComp(GetActiveConfigName(swAssembly), originalCfg, vbTextCompare) <> 0 Then
-
-            ActivateConfigurationChecked swAssembly, originalCfg
-
+    Dim allowedScopes As Object
+    Set allowedScopes = NormalizeVisiblePartScopes(visibleParts)
+    ProcessAssemblyCandidateSnapshot swAssembly, dxfFolder, True, allowedScopes, dictDone, dictOpened
+CleanUp:
+    On Error Resume Next
+    restoreOk = True
+    If Not swAssembly Is Nothing And originalCfg <> "" Then
+        Err.Clear
+        If StrComp(GetActiveConfigName(swAssembly), originalCfg, vbTextCompare) <> 0 Then
+            restoreOk = ActivateConfigurationChecked(swAssembly, originalCfg)
         End If
-
-        If openedHere Then
-
-            Dim assemblyTitle As String
-
-            assemblyTitle = GetDocumentActivationName(swAssembly)
-
-            Set swAssembly = Nothing
-
-            swApp.CloseDoc assemblyTitle
-
-        End If
-
+        If Err.Number <> 0 Then restoreOk = False
     End If
-
-RestoreActiveDocument:
-
-    If Not originalActiveDoc Is Nothing Then _
-        ActivateModelDocument originalActiveDoc
-
+    If Not restoreOk Then
+        PreserveCandidateDocument swAssembly, "subassembly-configuration-restore-failed"
+        If g_stopBatchReason = "" Then g_stopBatchReason = "Could not restore the selected subassembly configuration."
+    End If
+    If Not CloseCandidateDocument(assemblyPath, swAssembly, dictOpened) Then _
+        TraceRun "subassembly cleanup=stopped"
+    Set swAssembly = Nothing
+    If Not originalActiveDoc Is Nothing Then ActivateModelDocument originalActiveDoc
+    Set originalActiveDoc = Nothing
+    On Error GoTo 0
+    Exit Sub
+Failed:
+    TraceRun "subassembly reject=api-error number=" & CStr(Err.Number) & _
+             " description=" & DiagnosticLineValue(Err.Description) & " path=" & DiagnosticLineValue(assemblyPath)
+    Resume CleanUp
 End Sub
 
 Sub CollectSelectedSubassemblyParts(assemblyPath As String, cfg As String, _
-                                     visibleParts As Object, _
-                                     dictCandidates As Object)
-
-    If Not IsAssemblyPath(assemblyPath) Then Exit Sub
-
-    Dim originalActiveDoc As Object
-
-    Set originalActiveDoc = swApp.ActiveDoc
-
-    Dim swAssembly As Object
-
-    Dim openedHere As Boolean
-
-    Set swAssembly = swApp.GetOpenDocumentByName(assemblyPath)
-
-    If swAssembly Is Nothing Then
-
-        Dim errs As Long
-
-        Dim warns As Long
-
-        Set swAssembly = swApp.OpenDoc6(assemblyPath, swDocASSEMBLY, _
-                                       swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, _
-                                       cfg, errs, warns)
-
-        openedHere = Not swAssembly Is Nothing
-
-    End If
-
-    If swAssembly Is Nothing Then
-
-        Debug.Print "    Could not open selected subassembly: " & assemblyPath
-
-        Exit Sub
-
-    End If
-
-    If swAssembly.GetType <> swDocASSEMBLY Then GoTo CleanUpAssembly
-
-    If Not ActivateModelDocument(swAssembly) Then GoTo CleanUpAssembly
-
-    Dim originalCfg As String
-
-    originalCfg = GetActiveConfigName(swAssembly)
-
-    If Not ActivateConfigurationChecked(swAssembly, cfg) Then GoTo CleanUpAssembly
-
-    Dim activeCfg As Object
-
-    Set activeCfg = swAssembly.GetActiveConfiguration
-
-    If activeCfg Is Nothing Then GoTo CleanUpAssembly
-
-    Dim rootComp As Object
-
-    Set rootComp = activeCfg.GetRootComponent3(False)
-
-    If rootComp Is Nothing Then
-
-        Debug.Print "    Could not traverse active subassembly configuration without resolving it."
-
-        GoTo CleanUpAssembly
-
-    End If
-
-    Dim standaloneParts As Object
-    Set standaloneParts = CreateObject("Scripting.Dictionary")
-    CollectEligibleSubassemblyChildren rootComp, 1, standaloneParts
-
-    Dim partKey As Variant
-    For Each partKey In standaloneParts.Keys
-        If visibleParts.Exists(partKey) Then
-            Dim visibleCandidate As Variant
-            visibleCandidate = visibleParts(partKey)
-            If dictCandidates.Exists(partKey) Then
-                Dim existing As Variant
-                existing = dictCandidates(partKey)
-                existing(2) = CLng(existing(2)) + CLng(visibleCandidate(2))
-                dictCandidates(partKey) = existing
-            Else
-                dictCandidates.Add partKey, visibleCandidate
-            End If
+                                     visibleParts As Object, dictCandidates As Object)
+    ' The original assembly snapshot is authoritative, not a reopened display state.
+    Dim partKey As Variant, candidate As Variant, existing As Variant, scopedParts As Object
+    If visibleParts Is Nothing Then Exit Sub
+    Set scopedParts = NormalizeVisiblePartScopes(visibleParts)
+    For Each partKey In scopedParts.Keys
+        candidate = scopedParts(partKey)
+        If dictCandidates.Exists(partKey) Then
+            existing = dictCandidates(partKey)
+            existing(2) = CLng(existing(2)) + CLng(candidate(2))
+            If CStr(existing(3)) = "" Then existing(3) = candidate(3)
+            dictCandidates(partKey) = existing
+        Else
+            dictCandidates.Add partKey, candidate
         End If
+        TraceRun "subassembly-queue path=" & CStr(candidate(0)) & _
+                 " cfg=" & CStr(candidate(1)) & " quantity=" & CStr(candidate(2))
     Next partKey
-
-CleanUpAssembly:
-
-    If Not openedHere And originalCfg <> "" And _
-       StrComp(GetActiveConfigName(swAssembly), originalCfg, vbTextCompare) <> 0 Then
-
-        ActivateConfigurationChecked swAssembly, originalCfg
-
-    End If
-
-    If openedHere Then
-
-        Dim assemblyTitle As String
-
-        assemblyTitle = GetDocumentActivationName(swAssembly)
-
-        Set swAssembly = Nothing
-
-        swApp.CloseDoc assemblyTitle
-
-    End If
-
-    If Not originalActiveDoc Is Nothing Then _
-        ActivateModelDocument originalActiveDoc
-
 End Sub
 
 Sub CollectEligibleSubassemblyChildren(parentComp As Object, _
@@ -2605,7 +2703,7 @@ Sub CollectEligibleSubassemblyChildren(parentComp As Object, _
 
         Dim fullKey As String
 
-        fullKey = LCase(childPath) & "@" & childCfg
+        fullKey = DxfCandidateScopeKey(childPath, childCfg, childComp, Nothing, True)
 
         Dim candidate As Variant
 
@@ -2614,12 +2712,14 @@ Sub CollectEligibleSubassemblyChildren(parentComp As Object, _
             candidate = dictCandidates(fullKey)
 
             candidate(2) = CLng(candidate(2)) + assemblyCopies
+            If CStr(candidate(3)) = "" Then candidate(3) = ComponentImportHint(childComp)
 
             dictCandidates(fullKey) = candidate
 
         Else
 
-            candidate = Array(childPath, childCfg, assemblyCopies)
+            candidate = Array(childPath, childCfg, assemblyCopies, ComponentImportHint(childComp), Nothing)
+            Set candidate(4) = childComp
 
             dictCandidates.Add fullKey, candidate
 
@@ -2631,85 +2731,23 @@ NextChild:
 
 End Sub
 
-Sub ExportSelectedSubassemblyParts(dictCandidates As Object, dxfFolder As String, _
-                                   mode As Integer, dictDone As Object, _
-                                   dictOpened As Object)
-
+Sub ExportSelectedSubassemblyParts(swModel As Object, dictCandidates As Object, dxfFolder As String, _
+                                   mode As Integer, dictDone As Object, dictOpened As Object)
+    Dim key As Variant, candidate As Variant, partPath As String, cfg As String
+    Dim qty As Long, exported As Boolean
     If dictCandidates Is Nothing Then Exit Sub
-
-    Debug.Print "  Eligible selected-subassembly part keys: " & dictCandidates.Count
-
-    Dim fullKey As Variant
-
-    For Each fullKey In dictCandidates.Keys
-
-        If dictDone.Exists(CStr(fullKey)) Then GoTo NextCandidate
-
-        Dim candidate As Variant
-
-        candidate = dictCandidates(fullKey)
-
-        Dim partPath As String
-
-        Dim cfg As String
-
-        Dim qty As Long
-
-        partPath = CStr(candidate(0))
-
-        cfg = CStr(candidate(1))
-
-        qty = CLng(candidate(2))
-
-        Dim swPart As Object
-
-        Set swPart = OpenPartForExport(partPath, dictOpened)
-
-        If swPart Is Nothing Then GoTo NextCandidate
-
-        If IsToolboxPartSafe(swPart) Then
-
-            Debug.Print "    Toolbox part, skip: " & partPath
-
-            GoTo NextCandidate
-
-        End If
-
-        If Not ActivateConfigurationChecked(swPart, cfg) Then GoTo NextCandidate
-
-        swPart.EditRebuild3
-
-        swPart.ForceRebuild3 False
-
-        Dim isSM As Boolean
-
-        Dim isThin As Boolean
-
-        isSM = IsSheetMetalSafe(swPart)
-
-        If Not isSM Then isThin = IsThinPlateLike(swPart)
-
-        If Not isSM And Not isThin Then
-
-            Debug.Print "    Selected-subassembly part is not SM/plate-like, skip: " & partPath
-
-            GoTo NextCandidate
-
-        End If
-
-        Debug.Print "    Export selected-subassembly part: " & partPath & _
-                    " @ " & cfg & " qty=" & qty
-
-        Dim exported As Boolean
-
-        exported = ExportOnePart(swPart, partPath, cfg, qty, dxfFolder, mode, Nothing)
-
-        If exported Then dictDone.Add CStr(fullKey), True
-
+    For Each key In dictCandidates.Keys
+        If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit For
+        If dictDone.Exists(CStr(key)) Then GoTo NextCandidate
+        candidate = dictCandidates(key)
+        partPath = CStr(candidate(0)): cfg = CStr(candidate(1)): qty = CLng(candidate(2))
+        BeginDxfCandidate partPath, cfg, "selected-subassembly-part"
+        exported = ExportAssemblyCandidate(swModel, candidate(4), partPath, cfg, qty, dxfFolder, _
+                                           False, dictOpened, mode, Nothing, CStr(candidate(3)))
+        If exported Then dictDone.Add CStr(key), True
+        FinishDxfCandidate exported
 NextCandidate:
-
-    Next fullKey
-
+    Next key
 End Sub
 
 
@@ -2719,175 +2757,207 @@ End Sub
 Sub ProcessFullAssembly(swModel As Object, dxfFolder As String, _
                         assemblyExportMethod As Integer, dictDone As Object, _
                         dictOpened As Object)
-
     If assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
-
         ProcessFullAssemblyInContext swModel, dxfFolder, dictDone, dictOpened
-
-        Exit Sub
-
+    Else
+        ProcessAssemblyCandidateSnapshot swModel, dxfFolder, False, Nothing, dictDone, dictOpened
     End If
-
-
-
-    If Not ActivateModelDocument(swModel) Then Exit Sub
-
-    swModel.ResolveAllLightWeightComponents True
-
-    RebuildDocumentIfNeeded swModel
-
-    Dim vComps As Variant
-
-    vComps = swModel.GetComponents(False)
-
-    If IsEmpty(vComps) Then
-
-        Debug.Print "Total components: 0"
-
-        Exit Sub
-
-    End If
-
-    Debug.Print "Total components: " & (UBound(vComps) + 1)
-
-
-    Dim dictQty As Object
-
-    Set dictQty = BuildQtyDict(swModel)
-
-
-
-    Dim i As Long
-
-    Dim swComp As Object
-
-    For i = 0 To UBound(vComps)
-
-        Set swComp = vComps(i)
-
-        If swComp Is Nothing Then GoTo NextComp
-
-        If swComp.IsSuppressed Then GoTo NextComp
-        If ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then GoTo NextComp
-
-        If IsComponentHiddenSafe(swComp) Then
-            Debug.Print "[" & i & "] Component hidden, skip"
-            GoTo NextComp
-        End If
-
-
-
-        Dim partPath As String
-
-        partPath = swComp.GetPathName
-
-        Dim cfg As String
-
-        cfg = swComp.ReferencedConfiguration
-
-
-
-        Dim fullKey As String
-
-        fullKey = LCase(partPath) & "@" & cfg
-
-        If partPath = "" Then GoTo NextComp
-
-        If Not IsPartPath(partPath) Then
-
-            Debug.Print "[" & i & "] Not a part file, skip: " & partPath
-
-            GoTo NextComp
-
-        End If
-
-        If dictDone.Exists(fullKey) Then GoTo NextComp
-
-
-
-        Debug.Print "[" & i & "] " & partPath & " @ " & cfg
-
-
-
-        Dim swPartCheck As Object
-
-        Set swPartCheck = swComp.GetModelDoc2
-
-        If swPartCheck Is Nothing Then _
-            Set swPartCheck = OpenPartForExport(partPath, dictOpened)
-
-        If swPartCheck Is Nothing Then GoTo NextComp
-        If IsToolboxPartSafe(swPartCheck) Then
-            TraceRun "candidate reject=toolbox route=full-assembly path=" & DiagnosticLineValue(partPath)
-            GoTo NextComp
-        End If
-
-        If swPartCheck.GetType <> swDocPART Then
-
-            Debug.Print "  referenced model is not a part, skip"
-
-            GoTo NextComp
-
-        End If
-
-        If Not ActivateConfigurationChecked(swPartCheck, cfg) Then GoTo NextComp
-
-
-        Dim isSM As Boolean
-
-        isSM = IsSheetMetalSafe(swPartCheck)
-        Dim isThin As Boolean
-
-        isThin = False
-
-        If Not isSM Then
-
-            isThin = IsThinPlateLike(swPartCheck)
-        End If
-
-        If Not isSM And Not isThin Then
-
-            Debug.Print "  not SM/plate-like thin solid, skip"
-            GoTo NextComp
-
-        End If
-
-
-
-        Dim qty As Long
-
-        If dictQty.Exists(fullKey) Then
-
-            qty = CLng(dictQty(fullKey))
-
-        Else
-
-            qty = 1
-
-        End If
-
-        Dim swPart As Object
-
-        Set swPart = OpenPartForExport(partPath, dictOpened)
-
-        If swPart Is Nothing Then GoTo NextComp
-
-
-
-        If Not ActivateConfigurationChecked(swPart, cfg) Then GoTo NextComp
-
-        Dim exported As Boolean
-
-        exported = ExportOnePart(swPart, partPath, cfg, qty, dxfFolder, _
-                                 MODE_REGULAR, Nothing)
-
-        If exported Then dictDone.Add fullKey, True
-
-NextComp:
-
-    Next i
-
 End Sub
+
+Function SnapshotAssemblyPartInstances(swModel As Object) As Collection
+    Dim result As Collection, components As Variant, i As Long, c As Object
+    Dim pathName As String, cfg As String, reason As String, entry As Variant
+    Set result = New Collection
+    Set SnapshotAssemblyPartInstances = result
+    On Error GoTo Failed
+    components = swModel.GetComponents(False)
+    If IsEmpty(components) Then Exit Function
+    For i = LBound(components) To UBound(components)
+        Set c = components(i)
+        pathName = "": cfg = "": reason = ""
+        If c Is Nothing Then
+            TraceRun "snapshot skip=missing-component index=" & CStr(i)
+        Else
+            pathName = c.GetPathName: cfg = c.ReferencedConfiguration
+            If IsComponentActuallySuppressedSafe(c) Then
+                reason = "suppressed"
+            ElseIf IsComponentHiddenSafe(c) Then
+                reason = "hidden-or-visibility-unknown"
+            ElseIf ComponentHasExcludedAssemblyAncestor(c, False, False) Then
+                reason = "excluded-ancestor"
+            ElseIf Not IsPartPath(pathName) Then
+                reason = "not-part"
+            ElseIf cfg = "" Then
+                reason = "configuration-unavailable"
+            End If
+            If reason = "" Then
+                entry = Array(pathName, cfg, c)
+                result.Add entry
+                TraceRun "snapshot eligible index=" & CStr(i) & " path=" & DiagnosticLineValue(pathName) & _
+                         " cfg=" & DiagnosticLineValue(cfg) & " instance=" & DiagnosticLineValue(c.Name2)
+            Else
+                TraceRun "snapshot skip=" & reason & " index=" & CStr(i) & _
+                         " path=" & DiagnosticLineValue(pathName) & " cfg=" & DiagnosticLineValue(cfg)
+            End If
+        End If
+    Next i
+    TraceRun "snapshot complete instances=" & CStr(result.Count)
+    Exit Function
+Failed:
+    TraceRun "snapshot reject=api-error index=" & CStr(i) & " number=" & CStr(Err.Number)
+    ' Never silently export a partial snapshot.
+    Set SnapshotAssemblyPartInstances = Nothing
+End Function
+
+Sub ProcessAssemblyCandidateSnapshot(swModel As Object, dxfFolder As String, _
+                                     useContext As Boolean, allowedParts As Object, _
+                                     dictDone As Object, dictOpened As Object)
+    Dim instances As Collection, entry As Variant, quantities As Object
+    Dim swComp As Object, partPath As String, cfg As String, key As String
+    Dim qty As Long, i As Long, exported As Boolean
+    If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit Sub
+    If Not ActivateModelDocument(swModel) Then Exit Sub
+    RebuildDocumentIfNeeded swModel
+    Set instances = SnapshotAssemblyPartInstances(swModel)
+    If instances Is Nothing Then Exit Sub
+    Set quantities = CreateObject("Scripting.Dictionary")
+    For Each entry In instances
+        key = DxfCandidateScopeKey(CStr(entry(0)), CStr(entry(1)), entry(2), swModel)
+        If quantities.Exists(key) Then
+            quantities(key) = CLng(quantities(key)) + 1
+        Else
+            quantities.Add key, 1&
+        End If
+    Next entry
+    TraceRun "queue unique-path-configurations=" & CStr(quantities.Count) & " assembly-context=" & CStr(useContext)
+    For i = 1 To instances.Count
+        If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit For
+        entry = instances(i)
+        partPath = CStr(entry(0)): cfg = CStr(entry(1)): Set swComp = entry(2)
+        key = DxfCandidateScopeKey(partPath, cfg, swComp, swModel)
+        If dictDone.Exists(key) Then
+            TraceRun "queue skip=already-exported path=" & partPath & " cfg=" & cfg
+            GoTo NextCandidate
+        End If
+        qty = CLng(quantities(key))
+        If Not allowedParts Is Nothing Then
+            If Not allowedParts.Exists(key) Then
+                TraceRun "queue skip=outside-original-selection path=" & partPath & " cfg=" & cfg
+                GoTo NextCandidate
+            End If
+            entry = allowedParts(key)
+            qty = CLng(entry(2))
+        End If
+        BeginDxfCandidate partPath, cfg, IIf(useContext, "assembly-context", "assembly-part")
+        exported = ExportAssemblyCandidate(swModel, swComp, partPath, cfg, qty, dxfFolder, useContext, dictOpened)
+        If exported Then dictDone.Add key, True
+        FinishDxfCandidate exported
+NextCandidate:
+        Set swComp = Nothing
+        DoEvents
+    Next i
+End Sub
+
+Function ExportAssemblyCandidate(swModel As Object, ByVal swComp As Object, partPath As String, _
+                                 cfg As String, qty As Long, dxfFolder As String, _
+                                 useContext As Boolean, dictOpened As Object, _
+                                 Optional mode As Integer = MODE_REGULAR, _
+                                 Optional ByVal preferredFace As Object = Nothing, _
+                                 Optional importHint As String = "") As Boolean
+    Dim swPart As Object, originalCfg As String, restoreOk As Boolean, openedPath As String
+    Dim exported As Boolean, errorNumber As Long, errorText As String
+    If DxfStopRequested() Or g_stopBatchReason <> "" Then Exit Function
+    Set g_importComponent = swComp
+    Dim exportFolder As String
+    If g_candidateKey <> "" Then
+        Dim scopeKey As String
+        scopeKey = DxfCandidateScopeKey(partPath, cfg, swComp, swModel)
+        If scopeKey <> g_candidateKey Then
+            If g_candidateResults.Exists(g_candidateKey) Then g_candidateResults.Remove g_candidateKey
+            g_candidateKey = scopeKey
+            g_candidateResults(g_candidateKey) = "PENDING"
+        End If
+    End If
+    openedPath = partPath
+    g_importHint = importHint
+    On Error GoTo Failed
+    If Not swComp Is Nothing Then
+        If IsComponentHiddenSafe(swComp) Or IsComponentActuallySuppressedSafe(swComp) Or _
+           ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then
+            TraceRun "queue reject=component-state-changed"
+            GoTo CleanUp
+        End If
+        If Not CandidatePreflightAllows(swComp, partPath, cfg, useContext, mode, Not preferredFace Is Nothing) Then GoTo CleanUp
+        ResolveSelectedPartIfLightweight swComp
+        If useContext And IsComponentLightweightSafe(swComp) Then
+            TraceRun "queue reject=unresolved-lightweight-component"
+            GoTo CleanUp
+        End If
+        If StrComp(CStr(swComp.ReferencedConfiguration), cfg, vbTextCompare) <> 0 Then
+            TraceRun "queue reject=instance-configuration-changed requested=" & cfg
+            GoTo CleanUp
+        End If
+    ElseIf useContext Then
+        TraceRun "queue reject=context-component-missing"
+        GoTo CleanUp
+    End If
+    If swComp Is Nothing Then
+        If Not CandidatePreflightAllows(Nothing, partPath, cfg, False, mode, False) Then GoTo CleanUp
+    End If
+    Set swPart = OpenPartForExport(partPath, dictOpened, False)
+    If swPart Is Nothing Then
+        TraceRun "queue reject=open-part-failed"
+        GoTo CleanUp
+    End If
+    originalCfg = GetActiveConfigName(swPart)
+    If CStr(swPart.GetPathName) <> "" Then openedPath = CStr(swPart.GetPathName)
+    If DxfStopRequested() Or g_stopBatchReason <> "" Then GoTo CleanUp
+    If originalCfg = "" Then
+        TraceRun "queue reject=original-configuration-unreadable"
+        GoTo CleanUp
+    End If
+    exportFolder = CandidateExportFolder(dxfFolder, swModel, swComp)
+    If useContext Then
+        exported = ExportOnePartInAssemblyContext(swModel, swComp, swPart, partPath, cfg, qty, exportFolder, preferredFace)
+    ElseIf ActivateConfigurationChecked(swPart, cfg) Then
+        exported = ExportOnePart(swPart, partPath, cfg, qty, exportFolder, mode, Nothing)
+    End If
+CleanUp:
+    On Error Resume Next
+    restoreOk = True
+    If Not swPart Is Nothing And originalCfg <> "" Then
+        Err.Clear
+        If StrComp(GetActiveConfigName(swPart), originalCfg, vbTextCompare) <> 0 Then
+            restoreOk = ActivateConfigurationChecked(swPart, originalCfg)
+        End If
+        If Err.Number <> 0 Then restoreOk = False
+    End If
+    If Not restoreOk Then
+        PreserveCandidateDocument swPart, "configuration-restore-failed"
+        If g_stopBatchReason = "" Then g_stopBatchReason = _
+            "Could not restore a candidate configuration. Batch stopped; the document was left open."
+        TraceRun "configuration restore-failed requested=" & originalCfg
+        exported = False
+    End If
+    If Not CloseCandidateDocument(openedPath, swPart, dictOpened) Then exported = False
+    Set swPart = Nothing
+    If Not swModel Is Nothing Then
+        If Not ActivateModelDocument(swModel) Then
+            If g_stopBatchReason = "" Then g_stopBatchReason = "Could not reactivate the export assembly."
+        End If
+    End If
+    On Error GoTo 0
+    Set g_importComponent = Nothing
+    g_importHint = ""
+    ExportAssemblyCandidate = exported
+    Exit Function
+Failed:
+    errorNumber = Err.Number: errorText = Err.Description
+    TraceRun "queue reject=candidate-api-error number=" & CStr(errorNumber) & _
+             " description=" & DiagnosticLineValue(errorText)
+    exported = False
+    Resume CleanUp
+End Function
 
 
 
@@ -2895,252 +2965,7 @@ End Sub
 
 Sub ProcessFullAssemblyInContext(swModel As Object, dxfFolder As String, _
                                  dictDone As Object, dictOpened As Object)
-
-    If Not ActivateModelDocument(swModel) Then Exit Sub
-
-    RebuildDocumentIfNeeded swModel
-
-    Dim components As Variant
-
-    components = swModel.GetComponents(False)
-
-    If IsEmpty(components) Then
-
-        Debug.Print "Total components: 0"
-
-        Exit Sub
-
-    End If
-
-    Dim totalComponents As Long
-
-    totalComponents = UBound(components) + 1
-
-    Debug.Print "Total assembly-context components: " & totalComponents
-
-    Dim dictQty As Object
-
-    Set dictQty = BuildAssemblyContextQtyDict(swModel)
-
-    Dim dictPartExcluded As Object
-
-    Set dictPartExcluded = CreateObject("Scripting.Dictionary")
-
-    Dim i As Long
-
-    Dim swPart As Object
-
-    Dim openedForCandidate As Boolean
-
-    Dim skippedMissing As Long
-    Dim skippedSuppressed As Long
-    Dim skippedLightweight As Long
-    Dim skippedHidden As Long
-    Dim skippedAncestor As Long
-    Dim skippedNonPart As Long
-    Dim skippedDuplicate As Long
-    Dim skippedImported As Long
-    Dim skippedBodyShape As Long
-    Dim skippedOpen As Long
-    Dim skippedToolbox As Long
-    Dim candidateCount As Long
-    Dim exportedCount As Long
-
-    For i = 0 To UBound(components)
-
-        g_traceComponent = ""
-
-        openedForCandidate = False
-
-        Set swPart = Nothing
-
-        If (i Mod 100) = 0 Then _
-            TraceRun "context progress index=" & CStr(i)
-
-        Dim swComp As Object
-
-        Set swComp = components(i)
-
-        If swComp Is Nothing Then
-            skippedMissing = skippedMissing + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If IsComponentActuallySuppressedSafe(swComp) Then
-            skippedSuppressed = skippedSuppressed + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If IsComponentLightweightSafe(swComp) Then
-            skippedLightweight = skippedLightweight + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If IsComponentHiddenSafe(swComp) Then
-            skippedHidden = skippedHidden + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If ComponentHasExcludedAssemblyAncestor(swComp, True, False) Then
-            skippedAncestor = skippedAncestor + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        Dim partPath As String
-
-        partPath = swComp.GetPathName
-
-        If Not IsPartPath(partPath) Then
-            skippedNonPart = skippedNonPart + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        Dim cfg As String
-
-        cfg = swComp.ReferencedConfiguration
-
-        g_traceComponent = TraceFileLabel(partPath) & "@" & cfg
-
-        Dim fullKey As String
-
-        fullKey = LCase(partPath) & "@" & cfg
-
-        If dictDone.Exists(fullKey) Or dictPartExcluded.Exists(fullKey) Then
-            skippedDuplicate = skippedDuplicate + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        candidateCount = candidateCount + 1
-
-        TraceRun "context candidate index=" & CStr(i) & _
-                 " component=" & g_traceComponent
-
-        If Not ComponentBodiesMayBeSheetLike(swComp) Then
-
-            skippedBodyShape = skippedBodyShape + 1
-
-            TraceRun "context skip body-shape component=" & g_traceComponent
-
-            GoTo NextAssemblyContextComponent
-
-        End If
-
-        If g_generalImportedFilter Then
-
-            If IsImportedAssemblyComponent(swComp) Then
-
-                skippedImported = skippedImported + 1
-
-                dictPartExcluded.Add fullKey, "imported"
-
-                TraceRun "context skip imported scope=general component=" & _
-                         g_traceComponent
-
-                GoTo NextAssemblyContextComponent
-
-            End If
-
-        End If
-
-        Set swPart = swComp.GetModelDoc2
-
-        If swPart Is Nothing Then
-
-            Dim wasTracked As Boolean
-
-            wasTracked = dictOpened.Exists(LCase(partPath))
-
-            Set swPart = OpenPartForExport(partPath, dictOpened, False)
-
-            openedForCandidate = (Not wasTracked And _
-                                  dictOpened.Exists(LCase(partPath)))
-
-        End If
-
-        If swPart Is Nothing Then
-            skippedOpen = skippedOpen + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If swPart.GetType <> swDocPART Then
-            skippedNonPart = skippedNonPart + 1
-            GoTo NextAssemblyContextComponent
-        End If
-
-        If IsToolboxPartSafe(swPart) Then
-
-            skippedToolbox = skippedToolbox + 1
-
-            If Not dictPartExcluded.Exists(fullKey) Then _
-                dictPartExcluded.Add fullKey, "toolbox"
-
-            TraceRun "context skip toolbox component=" & g_traceComponent
-
-            GoTo NextAssemblyContextComponent
-
-        End If
-
-        Dim qty As Long
-
-        If dictQty.Exists(fullKey) Then
-
-            qty = CLng(dictQty(fullKey))
-
-        Else
-
-            qty = 1
-
-        End If
-
-        Dim noPreferredFace As Object
-
-        Set noPreferredFace = Nothing
-
-        Dim exported As Boolean
-
-        exported = ExportOnePartInAssemblyContext( _
-            swModel, swComp, swPart, partPath, cfg, qty, dxfFolder, noPreferredFace)
-
-        TraceRun "context result component=" & g_traceComponent & _
-                 " exported=" & CStr(exported)
-
-        If exported Then
-            dictDone.Add fullKey, True
-            exportedCount = exportedCount + 1
-        End If
-
-NextAssemblyContextComponent:
-
-        If openedForCandidate Then _
-            ClosePartOpenedForCandidate partPath, swPart, dictOpened
-
-        Set swPart = Nothing
-        Set swComp = Nothing
-
-        DoEvents
-
-    Next i
-
-    components = Empty
-    Set dictPartExcluded = Nothing
-    g_traceComponent = ""
-
-    TraceRun "context summary total=" & CStr(totalComponents) & _
-             " candidates=" & CStr(candidateCount) & _
-             " exported=" & CStr(exportedCount)
-    TraceRun "context skipped state missing=" & CStr(skippedMissing) & _
-             " suppressed=" & CStr(skippedSuppressed) & _
-             " lightweight=" & CStr(skippedLightweight) & _
-             " hidden=" & CStr(skippedHidden) & _
-             " ancestor=" & CStr(skippedAncestor)
-    TraceRun "context skipped type nonpart=" & CStr(skippedNonPart) & _
-             " duplicate=" & CStr(skippedDuplicate) & _
-             " imported=" & CStr(skippedImported) & _
-             " body-shape=" & CStr(skippedBodyShape) & _
-             " open=" & CStr(skippedOpen) & _
-             " toolbox=" & CStr(skippedToolbox)
-    TraceRun "assembly-context loop complete"
-
+    ProcessAssemblyCandidateSnapshot swModel, dxfFolder, True, Nothing, dictDone, dictOpened
 End Sub
 
 ' ================================================================
@@ -3149,16 +2974,23 @@ Sub ProcessSinglePart(swPart As Object, partPath As String, cfg As String, _
                       qty As Long, dxfFolder As String, mode As Integer, _
                       dictDone As Object, ByVal selectedFace As Object)
 
+    If DxfStopRequested() Then Exit Sub
     Dim fullKey As String
 
     fullKey = LCase(partPath) & "@" & cfg
 
     If dictDone.Exists(fullKey) Then Exit Sub
 
-    If Not ActivateConfigurationChecked(swPart, cfg) Then Exit Sub
+    BeginDxfCandidate partPath, cfg, "single-part"
+    Set g_importComponent = Nothing
+    If Not ActivateConfigurationChecked(swPart, cfg) Then
+        FinishDxfCandidate False
+        Exit Sub
+    End If
 
     If ExportOnePart(swPart, partPath, cfg, qty, dxfFolder, mode, selectedFace) Then _
         dictDone.Add fullKey, True
+    FinishDxfCandidate dictDone.Exists(fullKey)
 
 End Sub
 
@@ -3181,6 +3013,7 @@ Function OpenPartForExport(partPath As String, dictOpened As Object, _
     Set already = swApp.GetOpenDocumentByName(partPath)
 
     If Not already Is Nothing Then
+        TrackCandidateDocument already, True, dictOpened
 
         Set OpenPartForExport = already
 
@@ -3196,7 +3029,7 @@ Function OpenPartForExport(partPath As String, dictOpened As Object, _
 
     Dim p As Object
 
-    Set p = swApp.OpenDoc6(partPath, swDocPART, swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, "", errs, warns)
+    Set p = swApp.OpenDoc6(partPath, swDocPART, 1, "", errs, warns)
 
     If p Is Nothing Then
 
@@ -3208,13 +3041,8 @@ Function OpenPartForExport(partPath As String, dictOpened As Object, _
 
 
 
-    If activateAfterOpen Then ActivateModelDocument p
-
-    If Not dictOpened.Exists(LCase(partPath)) Then
-
-        dictOpened.Add LCase(partPath), GetDocumentActivationName(p)
-
-    End If
+    TrackCandidateDocument p, False, dictOpened
+    If activateAfterOpen And g_stopBatchReason = "" Then ActivateModelDocument p
 
     Set OpenPartForExport = p
 
@@ -3228,7 +3056,11 @@ Function ExportOnePart(swPart As Object, partPath As String, cfg As String, _
                        qty As Long, dxfFolder As String, _
                        mode As Integer, ByVal selectedFace As Object) As Boolean
 
-    If swPart Is Nothing Then Exit Function
+    If swPart Is Nothing Or DxfStopRequested() Then Exit Function
+    If StrComp(GetActiveConfigName(swPart), cfg, vbTextCompare) <> 0 Or cfg = "" Then
+        TraceRun "candidate reject=wrong-active-configuration requested=" & cfg
+        Exit Function
+    End If
     If IsToolboxPartSafe(swPart) Then
         TraceRun "candidate reject=toolbox route=part-export path=" & DiagnosticLineValue(partPath)
         Exit Function
@@ -3273,7 +3105,7 @@ Function ExportOnePart(swPart As Object, partPath As String, cfg As String, _
 
         If Not exportSelectedFace And Not isSM And Not isThin Then
 
-            Debug.Print "    Regular: not SM/plate-like thin solid, skip"
+            TraceRun "candidate reject=not-sheetmetal-or-thin-plate"
             Exit Function
 
         End If
@@ -3297,6 +3129,7 @@ Function ExportOnePart(swPart As Object, partPath As String, cfg As String, _
 
 
 
+    If DxfStopRequested() Then Exit Function
     Dim partName As String
 
     partName = Replace(swPart.GetTitle, ".SLDPRT", "")
@@ -3368,7 +3201,12 @@ Function ExportOnePart(swPart As Object, partPath As String, cfg As String, _
     exportQty = GetExportPieceCount(swPart, qty)
 
     outPath = outFolder & ConfiguredDxfOutputPrefix() & thickStr & "_" & g_material & "_" & exportQty & "db_" & partName & "(" & cfgName & ")" & suffix & ".dxf"
-    Debug.Print "    Output: " & outPath
+    outPath = ClaimDxfOutput(outPath, partPath, cfg)
+    TraceRun "output planned=" & DiagnosticLineValue(outPath) & " quantity=" & CStr(exportQty)
+    If KeepExistingDxf(outPath) Then
+        ExportOnePart = True
+        Exit Function
+    End If
 
 
 
@@ -3407,7 +3245,7 @@ Function ExportOnePart(swPart As Object, partPath As String, cfg As String, _
 
     Debug.Print "    RESULT: " & IIf(ok, "OK", "FAILED")
 
-    ExportOnePart = ok
+    ExportOnePart = VerifyDxfOutput(ok, outPath)
 
 End Function
 
@@ -3427,6 +3265,7 @@ Function ExportOnePartInAssemblyContext(swAssembly As Object, swComp As Object, 
     Dim originalPartCfg As String
 
     originalPartCfg = GetActiveConfigName(swPart)
+    Set g_importComponent = swComp
 
     If Not ActivateConfigurationChecked(swPart, cfg) Then
 
@@ -3549,9 +3388,15 @@ Function ExportOnePartInAssemblyContext(swAssembly As Object, swComp As Object, 
     outPath = outFolder & ConfiguredDxfOutputPrefix() & thickStr & "_" & g_material & "_" & _
               exportQty & "db_" & partName & "(" & cfgName & ").dxf"
 
-    Debug.Print "    Assembly-context output: " & outPath
+    outPath = ClaimDxfOutput(outPath, partPath, cfg)
+    TraceRun "output planned=" & DiagnosticLineValue(outPath) & " quantity=" & CStr(exportQty)
+    If KeepExistingDxf(outPath) Then
+        ok = True
+        GoTo RestorePartConfiguration
+    End If
 
-    ok = ExportAssemblyContextThinSolidDxf(swAssembly, swComp, preferredFace, outPath)
+    ok = ExportAssemblyContextThinSolidDxf(swAssembly, swComp, _
+                                           preferredFace, outPath)
 
     If ok Then
 
@@ -3577,6 +3422,7 @@ RestorePartConfiguration:
     If Not ActivateAssemblyDocument(swAssembly) Then _
         Debug.Print "      Could not restore the exact assembly document"
 
+    If outPath <> "" Then ok = VerifyDxfOutput(ok, outPath)
     ExportOnePartInAssemblyContext = ok
 
 End Function
@@ -4161,6 +4007,7 @@ Function ExportAssemblyComponentViaTemporaryPart(swComp As Object, _
     Dim i As Long
 
     For i = 0 To UBound(bodies)
+        If DxfStopRequested() Then GoTo CleanUpTemporaryPart
 
         Dim sourceBody As Object
 
@@ -4221,7 +4068,7 @@ Function ExportAssemblyComponentViaTemporaryPart(swComp As Object, _
 
     Set newPartResult = swApp.NewPart
 
-    Set swTempPart = swApp.ActiveDoc
+    Set swTempPart = newPartResult
 
     If newPartResult Is Nothing Or swTempPart Is Nothing Then
 
@@ -4241,6 +4088,7 @@ Function ExportAssemblyComponentViaTemporaryPart(swComp As Object, _
     Dim insertedCount As Long
 
     For i = 1 To bodyCopies.Count
+        If DxfStopRequested() Then GoTo CleanUpTemporaryPart
 
         Dim importedFeature As Object
 
@@ -4366,28 +4214,11 @@ CleanUpTemporaryPart:
         bodyInfo = Empty
         Set swTempPart = Nothing
 
-        If tempPartTitle <> "" Then swApp.QuitDoc tempPartTitle
-
-        DoEvents
-
+        If Not CloseTemporaryExportDocument(tempPartPath, tempPartTitle) Then
+            ExportAssemblyComponentViaTemporaryPart = False
+            Exit Function
+        End If
     End If
-
-    Dim stillOpen As Object
-
-    Set stillOpen = Nothing
-
-    If tempPartPath <> "" Then _
-        Set stillOpen = swApp.GetOpenDocumentByName(tempPartPath)
-
-    If Not stillOpen Is Nothing Then
-
-        TraceRun "component=" & g_traceComponent & " temp-document-remained-open"
-
-        swApp.CloseDoc GetDocumentActivationName(stillOpen)
-
-    End If
-
-    Set stillOpen = Nothing
 
     If tempPartPath <> "" Then
 
@@ -4406,112 +4237,143 @@ CleanUpTemporaryPart:
 
 End Function
 
+Function CloseTemporaryExportDocument(tempPath As String, tempTitle As String) As Boolean
+    Dim remaining As Object, identity As String
+    If tempTitle = "" Then
+        If g_stopBatchReason = "" Then g_stopBatchReason = "Temporary export part has no safe close identity."
+        Exit Function
+    End If
+    identity = tempPath
+    If identity = "" Then identity = tempTitle
+    On Error Resume Next
+    swApp.QuitDoc tempTitle
+    DoEvents
+    Set remaining = swApp.GetOpenDocumentByName(identity)
+    ' A failed save can leave the temporary part untitled.
+    If remaining Is Nothing Then Set remaining = swApp.GetOpenDocumentByName(tempTitle)
+    If Not remaining Is Nothing Then
+        identity = CStr(remaining.GetPathName)
+        If identity = "" Then identity = CStr(remaining.GetTitle)
+        Set remaining = Nothing
+        If identity <> "" Then swApp.CloseDoc identity
+    End If
+    On Error GoTo 0
+    CloseTemporaryExportDocument = VerifyTemporaryPartClosed(tempPath, tempTitle)
+End Function
+
+Function VerifyTemporaryPartClosed(tempPath As String, tempTitle As String) As Boolean
+    Dim windows As Collection, model As Object, snapshotOk As Boolean, i As Long
+    On Error GoTo Failed
+    Set windows = GetModelWindowDocuments(snapshotOk)
+    If Not snapshotOk Or windows Is Nothing Then GoTo Failed
+    For i = 1 To windows.Count
+        Set model = windows(i)
+        If CStr(model.GetPathName) <> "" Then
+            If StrComp(CStr(model.GetPathName), tempPath, vbTextCompare) = 0 Then GoTo Failed
+        Else
+            If StrComp(CStr(model.GetTitle), tempTitle, vbTextCompare) = 0 Then GoTo Failed
+        End If
+    Next i
+    VerifyTemporaryPartClosed = True
+    TraceRun "cleanup temporary-window-closed title=" & tempTitle
+    Exit Function
+Failed:
+    If g_stopBatchReason = "" Then g_stopBatchReason = "Could not verify closure of a temporary export part; batch stopped."
+    TraceRun "cleanup reject=temporary-window-not-closed title=" & tempTitle
+End Function
+
 ' ================================================================
 
 Function ExportSMFlatPattern(swPart As Object, filePath As String) As Boolean
-
-    Debug.Print "      --- ExportSMFlatPattern ---"
-
+    Dim swFeat As Object, originalState As Long, changed As Boolean
+    Dim bRet As Boolean, errs As Long, warns As Long, errorNumber As Long
+    On Error GoTo Failed
     DeleteExistingFile filePath
-
     swPart.ClearSelection2 True
-
-    Dim bRet As Boolean
-
     On Error Resume Next
-
+    Err.Clear
     bRet = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportSheetMetal, True, Empty, False, False, SHEET_METAL_EXPORT_OPTIONS, Empty)
-
-    On Error GoTo 0
-
-    Debug.Print "      ExportToDWG2 direct=" & bRet & " file=" & PathFileExists(filePath)
-
+    errorNumber = Err.Number
+    On Error GoTo Failed
+    TraceRun "sheetmetal method=direct ok=" & CStr(bRet) & " error=" & CStr(errorNumber)
     If bRet And PathFileExists(filePath) Then
-
         ExportSMFlatPattern = True
-
         Exit Function
-
     End If
-
-    Dim swFeat As Object
-
     Set swFeat = FindFlatPatternFeat(swPart)
-
     If swFeat Is Nothing Then
-
-        Debug.Print "      No FlatPattern feature found"
-
+        TraceRun "sheetmetal reject=no-flat-pattern"
         Exit Function
-
     End If
-
-    Dim wasSupp As Boolean
-
-    wasSupp = swFeat.IsSuppressed
-
-    If wasSupp Then
-
-        swFeat.SetSuppression2 2, 2, Nothing
-
+    originalState = FeatureSuppressionState(swFeat)
+    If originalState < 0 Then
+        TraceRun "sheetmetal reject=unknown-flat-pattern-state"
+        Exit Function
+    End If
+    If originalState = 1 Then
+        changed = True
+        If Not SetFeatureSuppressionChecked(swFeat, False) Then GoTo RestoreFlatPattern
         swPart.EditRebuild3
-
     End If
-
     DeleteExistingFile filePath
-
     swPart.ClearSelection2 True
-
     swFeat.Select True
-
     swPart.EditRebuild3
-
+    bRet = False
     On Error Resume Next
-
+    Err.Clear
     bRet = swPart.ExportToDWG2(filePath, swPart.GetPathName, swExportToDWG_ExportSheetMetal, True, Empty, False, False, SHEET_METAL_EXPORT_OPTIONS, Empty)
-
-    On Error GoTo 0
-
-    Debug.Print "      ExportToDWG2 selected flat=" & bRet & " file=" & PathFileExists(filePath)
-
+    errorNumber = Err.Number
+    On Error GoTo Failed
+    TraceRun "sheetmetal method=selected-flat ok=" & CStr(bRet) & " error=" & CStr(errorNumber)
     If bRet And PathFileExists(filePath) Then
-
         ExportSMFlatPattern = True
-
         GoTo RestoreFlatPattern
-
     End If
-
     DeleteExistingFile filePath
-
-    Dim errs As Long
-
-    Dim warns As Long
-
+    bRet = False
     On Error Resume Next
-
+    Err.Clear
     bRet = swPart.ExportFlatPatternView(filePath, swExportFlatPatternOption_RemoveBends)
-
-    If bRet Then swPart.Extension.SaveAs filePath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, errs, warns
-
-    On Error GoTo 0
-
-    Debug.Print "      ExportFlatPatternView fallback=" & bRet & " file=" & PathFileExists(filePath)
-
+    If bRet Then bRet = swPart.Extension.SaveAs(filePath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, errs, warns)
+    errorNumber = Err.Number
+    On Error GoTo Failed
+    TraceRun "sheetmetal method=flat-view ok=" & CStr(bRet) & " error=" & CStr(errorNumber) & _
+             " save-errors=" & CStr(errs) & " warnings=" & CStr(warns)
     ExportSMFlatPattern = (bRet And PathFileExists(filePath))
-
 RestoreFlatPattern:
-
+    On Error Resume Next
     swPart.ClearSelection2 True
-
-    If wasSupp Then
-
-        swFeat.SetSuppression2 0, 2, Nothing
-
+    If changed Then
+        If Not SetFeatureSuppressionChecked(swFeat, True) Then _
+            TraceRun "sheetmetal restore-failed=flat-pattern-suppression"
         swPart.EditRebuild3
-
     End If
+    On Error GoTo 0
+    Exit Function
+Failed:
+    TraceRun "sheetmetal reject=api-error number=" & CStr(Err.Number) & _
+             " description=" & DiagnosticLineValue(Err.Description)
+    ExportSMFlatPattern = False
+    Resume RestoreFlatPattern
+End Function
 
+Function SetFeatureSuppressionChecked(feature As Object, suppress As Boolean) As Boolean
+    Dim action As Long, expected As Long, ok As Boolean
+    expected = Abs(CLng(suppress))
+    If FeatureSuppressionState(feature) = expected Then
+        SetFeatureSuppressionChecked = True
+        Exit Function
+    End If
+    If suppress Then action = swSuppressFeature Else action = swUnSuppressFeature
+    On Error GoTo Failed
+    ok = CBool(feature.SetSuppression2(action, swThisConfiguration, Empty))
+    SetFeatureSuppressionChecked = (ok And FeatureSuppressionState(feature) = expected)
+    TraceRun "feature-suppression current-configuration-only action=" & CStr(action) & _
+             " verified=" & CStr(SetFeatureSuppressionChecked)
+    Exit Function
+Failed:
+    TraceRun "feature-suppression failed error=" & CStr(Err.Number)
 End Function
 
 
@@ -5214,331 +5076,255 @@ Function IsImportedPartPath(pathName As String) As Boolean
 End Function
 
 Function IsImportedAssemblyComponent(swComp As Object) As Boolean
-
-    If swComp Is Nothing Then Exit Function
-
-    Dim importedPath As String
-
-    On Error Resume Next
-
-    importedPath = CStr(swComp.GetImportedPath)
-
-    On Error GoTo 0
-
-    If Trim$(importedPath) <> "" Then
-
+    Dim hint As String
+    hint = ComponentImportHint(swComp)
+    If hint = "#UNKNOWN" Then
+        g_importUnknown = True
+    ElseIf hint <> "" Then
         IsImportedAssemblyComponent = True
-
-        Exit Function
-
+        TraceRun "import hit=component-path source=" & DiagnosticLineValue(hint)
     End If
+End Function
 
-    Dim f As Object
+Function ComponentImportHint(swComp As Object) As String
+    If swComp Is Nothing Then Exit Function
+    On Error GoTo Failed
+    ComponentImportHint = Trim$(CStr(swComp.GetImportedPath))
+    Exit Function
+Failed:
+    ComponentImportHint = "#UNKNOWN"
+    TraceRun "import component-path unavailable error=" & CStr(Err.Number)
+End Function
 
+Function FeatureSuppressionState(feature As Object) As Long
+    Dim states As Variant
+    FeatureSuppressionState = -1
     On Error Resume Next
-
-    Set f = swComp.FirstFeature
-
+    Err.Clear
+    states = feature.IsSuppressed2(swThisConfiguration, Empty)
+    If Err.Number = 0 And IsArray(states) Then
+        FeatureSuppressionState = Abs(CLng(states(LBound(states))))
+    Else
+        Err.Clear
+        FeatureSuppressionState = Abs(CLng(feature.IsSuppressed))
+        If Err.Number <> 0 Then FeatureSuppressionState = -1
+    End If
     On Error GoTo 0
+End Function
 
-    Dim featureCount As Long
-
-    Do While Not f Is Nothing And featureCount < 256
-
-        Dim typeName As String
-
-        Dim featureName As String
-
-        On Error Resume Next
-
-        typeName = LCase$(CStr(f.GetTypeName2))
-        featureName = LCase$(CStr(f.Name))
-
-        On Error GoTo 0
-
-        If InStr(1, typeName, "import", vbTextCompare) > 0 Or _
-           Left$(featureName, 8) = "imported" Or _
-           InStr(1, featureName, ".stp", vbTextCompare) > 0 Or _
-           InStr(1, featureName, ".step", vbTextCompare) > 0 Then
-
-            IsImportedAssemblyComponent = True
-
-            Set f = Nothing
-
+Function FeatureTreeHasImport(owner As Object) As Boolean
+    Dim pending As Collection, entry As Variant
+    Dim f As Object, nextFeature As Object, child As Object
+    Dim count As Long, depth As Long, isSub As Boolean, state As Long
+    Dim typeName As String, featureName As String, isInterconnect As Boolean
+    Dim probeError As Long
+    Set pending = New Collection
+    On Error GoTo Failed
+    Set f = owner.FirstFeature
+    If Not f Is Nothing Then pending.Add Array(f, 0&, False)
+    Do While pending.Count > 0
+        If count >= 2048 Then
+            g_importUnknown = True
+            TraceRun "import unknown=feature-walk-limit count=" & CStr(count)
             Exit Function
-
         End If
-
-        featureCount = featureCount + 1
-
-        On Error Resume Next
-
-        Set f = f.GetNextFeature
-
-        On Error GoTo 0
-
+        entry = pending(pending.Count)
+        pending.Remove pending.Count
+        Set f = entry(0): depth = CLng(entry(1)): isSub = CBool(entry(2))
+        count = count + 1
+        Set nextFeature = Nothing
+        If isSub Then
+            Set nextFeature = f.GetNextSubFeature
+        Else
+            Set nextFeature = f.GetNextFeature
+        End If
+        If Not nextFeature Is Nothing Then pending.Add Array(nextFeature, depth, isSub)
+        state = FeatureSuppressionState(f)
+        If state <> 1 Then
+            If state < 0 Then g_importUnknown = True
+            typeName = "": featureName = "": isInterconnect = False
+            typeName = LCase$(CStr(f.GetTypeName2))
+            featureName = LCase$(CStr(f.Name))
+            On Error Resume Next
+            Err.Clear
+            isInterconnect = CBool(f.Is3DInterconnectFeature)
+            probeError = Err.Number
+            On Error GoTo Failed
+            ' Older SOLIDWORKS versions lack this optional API.
+            If probeError <> 0 And probeError <> 438 And probeError <> 445 Then g_importUnknown = True
+            If InStr(1, typeName, "import", vbTextCompare) > 0 Or _
+               Left$(featureName, 8) = "imported" Or _
+               InStr(1, featureName, ".stp", vbTextCompare) > 0 Or _
+               InStr(1, featureName, ".step", vbTextCompare) > 0 Or isInterconnect Then
+                FeatureTreeHasImport = True
+                TraceRun "import hit=feature type=" & DiagnosticLineValue(typeName) & _
+                         " name=" & DiagnosticLineValue(featureName) & " depth=" & CStr(depth) & _
+                         " interconnect=" & CStr(isInterconnect) & " suppression=" & CStr(state)
+                Exit Function
+            End If
+            Set child = f.GetFirstSubFeature
+            If Not child Is Nothing Then
+                If depth >= 32 Then
+                    g_importUnknown = True
+                    TraceRun "import unknown=feature-depth-limit"
+                Else
+                    pending.Add Array(child, depth + 1, True)
+                End If
+            End If
+        End If
     Loop
+    TraceRun "import feature-walk count=" & CStr(count) & " incomplete=" & CStr(g_importUnknown)
+    Exit Function
+Failed:
+    g_importUnknown = True
+    TraceRun "import unknown=feature-api-error number=" & CStr(Err.Number) & _
+             " description=" & DiagnosticLineValue(Err.Description)
+End Function
 
-    Set f = Nothing
+Function CandidatePreflightAllows(ByVal swComp As Object, ByVal partPath As String, ByVal cfg As String, _
+                                  ByVal useContext As Boolean, ByVal mode As Integer, ByVal hasSelectedFace As Boolean) As Boolean
+    Dim model As Object, bodies As Variant, toolboxType As Long, key As String
+    CandidatePreflightAllows = True
+    On Error GoTo DeferInspection
+    key = LCase$(partPath)
+    If g_preflightToolbox.Exists(key) Then
+        If CBool(g_preflightToolbox(key)) Then GoTo ToolboxRejected
+    Else
+        If Not swComp Is Nothing Then Set model = swComp.GetModelDoc2
+        If model Is Nothing Then Set model = swApp.GetOpenDocumentByName(partPath)
+        If Not model Is Nothing Then
+            toolboxType = CLng(model.Extension.ToolboxPartType)
+            g_preflightToolbox.Add key, (toolboxType <> 0)
+            If toolboxType <> 0 Then GoTo ToolboxRejected
+        End If
+    End If
+    If mode <> MODE_REGULAR Or hasSelectedFace Then Exit Function
+    key = key & "@" & cfg
+    If Not useContext And g_preflightRejected.Exists(key) Then GoTo ShapeRejected
+    If useContext Then
+        If swComp Is Nothing Then Exit Function
+        ' Lightweight bodies may not report sheet metal reliably.
+        If IsComponentLightweightSafe(swComp) Then Exit Function
+        If ComponentBodiesMayBeSheetLike(swComp) Then Exit Function
+    Else
+        If model Is Nothing And Not swComp Is Nothing Then Set model = swComp.GetModelDoc2
+        If model Is Nothing Then Set model = swApp.GetOpenDocumentByName(partPath)
+        If model Is Nothing Then Exit Function
+        If StrComp(GetActiveConfigName(model), cfg, vbTextCompare) <> 0 Then
+            TraceRun "preflight defer=source-configuration-not-loaded requested=" & cfg
+            Exit Function
+        End If
+        bodies = model.GetBodies2(swSolidBody, False)
+        If BodiesMayBeSheetLike(bodies) Then Exit Function
+        g_preflightRejected(key) = True
+    End If
+ShapeRejected:
+    CandidatePreflightAllows = False
+    TraceRun "preflight reject=non-sheet-body before-open path=" & DiagnosticLineValue(partPath)
+    Exit Function
+ToolboxRejected:
+    CandidatePreflightAllows = False
+    TraceRun "preflight reject=toolbox before-open path=" & DiagnosticLineValue(partPath)
+    Exit Function
+DeferInspection:
+    TraceRun "preflight defer=metadata-unavailable error=" & CStr(Err.Number)
+End Function
 
+Function BodiesMayBeSheetLike(bodies As Variant) As Boolean
+    Dim b As Object, i As Long, t As Double, w As Double, length As Double
+    BodiesMayBeSheetLike = True
+    On Error GoTo DeferInspection
+    If IsEmpty(bodies) Then GoTo DeferInspection
+    If Not IsArray(bodies) Then GoTo DeferInspection
+    For i = LBound(bodies) To UBound(bodies)
+        Set b = bodies(i)
+        If CBool(b.IsSheetMetal) Then Exit Function
+    Next i
+    If Not GetBodiesPlateDimensions(bodies, t, w, length) Then GoTo DeferInspection
+    BodiesMayBeSheetLike = (t <= THICKNESS_LIMIT And _
+        w >= t * THIN_PLATE_MIN_RATIO And length >= t * THIN_PLATE_MIN_RATIO)
+    TraceRun "body-prefilter accepted=" & CStr(BodiesMayBeSheetLike) & _
+             " t-mm=" & CStr(t) & " width-mm=" & CStr(w) & " length-mm=" & CStr(length)
+    Exit Function
+DeferInspection:
+    TraceRun "body-prefilter defer=geometry-unavailable error=" & CStr(Err.Number)
 End Function
 
 Function ComponentBodiesMayBeSheetLike(swComp As Object) As Boolean
-
-    If swComp Is Nothing Then Exit Function
-
-    Dim bodyInfo As Variant
-
-    Dim bodies As Variant
-
-    bodyInfo = Empty
-    bodies = Empty
-
-    On Error Resume Next
-
+    Dim bodyInfo As Variant, bodies As Variant
+    ComponentBodiesMayBeSheetLike = True
+    On Error GoTo DeferInspection
     bodies = swComp.GetBodies3(swSolidBody, bodyInfo)
-
-    On Error GoTo 0
-
-    If IsEmpty(bodies) Then Exit Function
-
-    Dim minX As Double
-    Dim minY As Double
-    Dim minZ As Double
-    Dim maxX As Double
-    Dim maxY As Double
-    Dim maxZ As Double
-
-    minX = 1E+30
-    minY = 1E+30
-    minZ = 1E+30
-    maxX = -1E+30
-    maxY = -1E+30
-    maxZ = -1E+30
-
-    Dim i As Long
-
-    For i = 0 To UBound(bodies)
-
-        Dim b As Object
-
-        Set b = bodies(i)
-
-        If Not b Is Nothing Then
-
-            Dim isSheetMetalBody As Boolean
-
-            isSheetMetalBody = False
-
-            On Error Resume Next
-
-            isSheetMetalBody = CBool(b.IsSheetMetal)
-
-            On Error GoTo 0
-
-            If isSheetMetalBody Then
-
-                ComponentBodiesMayBeSheetLike = True
-
-                Set b = Nothing
-                bodies = Empty
-                bodyInfo = Empty
-
-                Exit Function
-
-            End If
-
-            Dim bodyBox As Variant
-
-            bodyBox = Empty
-
-            On Error Resume Next
-
-            bodyBox = b.GetBodyBox
-
-            On Error GoTo 0
-
-            If Not IsEmpty(bodyBox) Then
-
-                If bodyBox(0) < minX Then minX = bodyBox(0)
-                If bodyBox(1) < minY Then minY = bodyBox(1)
-                If bodyBox(2) < minZ Then minZ = bodyBox(2)
-                If bodyBox(3) > maxX Then maxX = bodyBox(3)
-                If bodyBox(4) > maxY Then maxY = bodyBox(4)
-                If bodyBox(5) > maxZ Then maxZ = bodyBox(5)
-
-            End If
-
-        End If
-
-        Set b = Nothing
-
-    Next i
-
-    bodyInfo = Empty
-
-    If minX > 1E+29 Then Exit Function
-
-    Dim a As Double
-    Dim middle As Double
-    Dim longest As Double
-
-    a = Abs(maxX - minX) * 1000#
-    middle = Abs(maxY - minY) * 1000#
-    longest = Abs(maxZ - minZ) * 1000#
-
-    Dim swapValue As Double
-
-    If a > middle Then
-        swapValue = a
-        a = middle
-        middle = swapValue
-    End If
-
-    If middle > longest Then
-        swapValue = middle
-        middle = longest
-        longest = swapValue
-    End If
-
-    If a > middle Then
-        swapValue = a
-        a = middle
-        middle = swapValue
-    End If
-
-    If a > 0# And a <= THICKNESS_LIMIT Then
-        ComponentBodiesMayBeSheetLike = _
-            (middle >= a * THIN_PLATE_MIN_RATIO And _
-             longest >= a * THIN_PLATE_MIN_RATIO)
-    End If
-
-    If Not ComponentBodiesMayBeSheetLike Then
-        ' A rotated plate can have a thick axis-aligned box. Measure the
-        ' actual normal span before rejecting it without opening its part.
-        Dim actualThickness As Double
-        actualThickness = GetBodiesThicknessViaExtents(bodies)
-        If actualThickness > 0# And actualThickness <= THICKNESS_LIMIT Then
-            ComponentBodiesMayBeSheetLike = _
-                (middle >= actualThickness * THIN_PLATE_MIN_RATIO And _
-                 longest >= actualThickness * THIN_PLATE_MIN_RATIO)
-        End If
-    End If
-    bodies = Empty
-
+    ComponentBodiesMayBeSheetLike = BodiesMayBeSheetLike(bodies)
+    Exit Function
+DeferInspection:
+    TraceRun "component-prefilter defer=geometry-unavailable error=" & CStr(Err.Number)
 End Function
 
 Function IsImportedGeometryPart(swPart As Object) As Boolean
-
-    If swPart Is Nothing Then Exit Function
-
     Dim pathName As String
-
-    On Error Resume Next
-
-    pathName = swPart.GetPathName
-
-    On Error GoTo 0
-
-    If IsImportedPartPath(pathName) Then
-
-        TraceRun "imported-filter hit=path path=" & _
-                 DiagnosticLineValue(pathName)
-
-        IsImportedGeometryPart = True
-
+    If swPart Is Nothing Then
+        g_importUnknown = True
         Exit Function
-
     End If
-
-    Dim f As Object
-
-    Set f = swPart.FirstFeature
-
-    Do While Not f Is Nothing
-
-        Dim typeName As String
-
-        Dim featName As String
-
-        On Error Resume Next
-
-        typeName = LCase(f.GetTypeName2)
-        featName = LCase(f.Name)
-
-        On Error GoTo 0
-
-        If InStr(1, typeName, "import", vbTextCompare) > 0 Then
-
-            TraceRun "imported-filter hit=feature-type type=" & _
-                     DiagnosticLineValue(typeName) & _
-                     " name=" & DiagnosticLineValue(featName) & _
-                     " path=" & DiagnosticLineValue(pathName)
-
-            IsImportedGeometryPart = True
-
-            Exit Function
-
-        End If
-
-        If Left(featName, 8) = "imported" Then
-
-            TraceRun "imported-filter hit=feature-name name=" & _
-                     DiagnosticLineValue(featName) & _
-                     " type=" & DiagnosticLineValue(typeName) & _
-                     " path=" & DiagnosticLineValue(pathName)
-
-            IsImportedGeometryPart = True
-
-            Exit Function
-
-        End If
-
-        If InStr(1, featName, ".stp", vbTextCompare) > 0 Or InStr(1, featName, ".step", vbTextCompare) > 0 Then
-
-            TraceRun "imported-filter hit=step-feature-name name=" & _
-                     DiagnosticLineValue(featName) & _
-                     " type=" & DiagnosticLineValue(typeName) & _
-                     " path=" & DiagnosticLineValue(pathName)
-
-            IsImportedGeometryPart = True
-
-            Exit Function
-
-        End If
-
-        Set f = f.GetNextFeature
-
-    Loop
-
+    On Error GoTo Failed
+    pathName = swPart.GetPathName
+    If IsImportedPartPath(pathName) Then
+        TraceRun "import hit=part-path path=" & DiagnosticLineValue(pathName)
+        IsImportedGeometryPart = True
+    Else
+        IsImportedGeometryPart = FeatureTreeHasImport(swPart)
+    End If
+    Exit Function
+Failed:
+    g_importUnknown = True
+    TraceRun "import unknown=part-api-error number=" & CStr(Err.Number)
 End Function
 
 Function ShouldRejectImportedCandidate(swPart As Object, _
                                        candidateIsWasherLike As Boolean) As Boolean
-    If swPart Is Nothing Then Exit Function
-
-    If Not g_generalImportedFilter And Not candidateIsWasherLike Then _
+    Dim imported As Boolean, filterScope As String
+    g_importUnknown = False
+    If Not g_generalImportedFilter And Not candidateIsWasherLike Then
+        TraceRun "import scope=washerlike result=not-applicable"
         Exit Function
-
-    If Not IsImportedGeometryPart(swPart) Then Exit Function
-
-    ShouldRejectImportedCandidate = True
-
-    Dim filterScope As String
-
-    If g_generalImportedFilter Then
-
-        filterScope = "general"
-
-    Else
-
-        filterScope = "washerlike"
-
     End If
-
-    TraceRun "imported-filter reject scope=" & filterScope & _
-             " component=" & g_traceComponent
-
+    If g_generalImportedFilter Then
+        filterScope = "general"
+    Else
+        filterScope = "washerlike"
+    End If
+    On Error GoTo InspectionFailed
+    imported = IsImportedGeometryPart(swPart)
+    If g_importHint = "#UNKNOWN" Then
+        g_importUnknown = True
+    ElseIf g_importHint <> "" Then
+        imported = True
+        TraceRun "import hit=snapshotted-component-path source=" & DiagnosticLineValue(g_importHint)
+    End If
+    If Not imported And Not g_importComponent Is Nothing Then
+        ' Only the actual candidate, never an imported ancestor or previous part.
+        If StrComp(g_importComponent.GetPathName, swPart.GetPathName, vbTextCompare) = 0 And _
+           StrComp(g_importComponent.ReferencedConfiguration, GetActiveConfigName(swPart), vbTextCompare) = 0 Then
+            imported = IsImportedAssemblyComponent(g_importComponent)
+        End If
+    End If
+InspectionComplete:
+    ShouldRejectImportedCandidate = (imported Or g_importUnknown)
+    TraceRun "import scope=" & filterScope & " imported=" & CStr(imported) & _
+             " unknown=" & CStr(g_importUnknown)
+    If ShouldRejectImportedCandidate Then
+        If imported Then
+            TraceRun "imported-filter reject=imported scope=" & filterScope
+        Else
+            TraceRun "imported-filter reject=inspection-incomplete scope=" & filterScope
+        End If
+    End If
+    Exit Function
+InspectionFailed:
+    g_importUnknown = True
+    TraceRun "import unknown=candidate-api-error number=" & CStr(Err.Number)
+    Resume InspectionComplete
 End Function
 
 Function IsToolboxPartSafe(swPart As Object) As Boolean
@@ -7373,6 +7159,7 @@ Function WritePrecutBoxDxf(swPart As Object, filePath As String, isSM As Boolean
     Dim wasSupp As Boolean
 
     wasSupp = False
+    On Error GoTo WriteFail
 
     If isSM Then
 
@@ -7380,11 +7167,12 @@ Function WritePrecutBoxDxf(swPart As Object, filePath As String, isSM As Boolean
 
         If Not flatFeat Is Nothing Then
 
-            wasSupp = flatFeat.IsSuppressed
+            If FeatureSuppressionState(flatFeat) < 0 Then GoTo CleanFail
+            wasSupp = (FeatureSuppressionState(flatFeat) = 1)
 
             If wasSupp Then
 
-                flatFeat.SetSuppression2 2, 2, Nothing
+                If Not SetFeatureSuppressionChecked(flatFeat, False) Then GoTo CleanFail
 
                 swPart.EditRebuild3
 
@@ -7400,7 +7188,7 @@ Function WritePrecutBoxDxf(swPart As Object, filePath As String, isSM As Boolean
 
     Dim longDim As Double
 
-    If Not GetSortedBoxDimsMM(swPart, t, w, longDim) Then GoTo CleanFail
+    If Not GetPartFilterDimensions(swPart, t, w, longDim) Then GoTo CleanFail
 
     Dim off As Double
 
@@ -7477,7 +7265,9 @@ CleanUp:
 
     If wasSupp Then
 
-        flatFeat.SetSuppression2 0, 2, Nothing
+        On Error Resume Next
+        If Not SetFeatureSuppressionChecked(flatFeat, True) Then _
+            TraceRun "precut restore-failed=flat-pattern-suppression"
 
         swPart.EditRebuild3
 
@@ -8128,35 +7918,32 @@ End Function
 
 
 Function IsSheetMetal(swPart As Object) As Boolean
-
-    Dim f As Object
-
+    Dim f As Object, count As Long
+    If PartHasSheetMetalBody(swPart) Then
+        IsSheetMetal = True
+        Exit Function
+    End If
+    On Error GoTo Failed
     Set f = swPart.FirstFeature
-
-    Do While Not f Is Nothing
-
+    Do While Not f Is Nothing And count < 2048
+        count = count + 1
         If f.GetTypeName2 = "SheetMetal" Then
-
-            IsSheetMetal = True
-
-            Exit Function
-
+            If FeatureSuppressionState(f) = 0 Then
+                IsSheetMetal = True
+                Exit Function
+            End If
         End If
-
         Set f = f.GetNextFeature
-
     Loop
-
+    Exit Function
+Failed:
+    TraceRun "sheetmetal inspection-error=" & CStr(Err.Number)
 End Function
 
 
 
 Function IsSheetMetalSafe(swPart As Object) As Boolean
-
     IsSheetMetalSafe = IsSheetMetal(swPart)
-
-    If Not IsSheetMetalSafe Then IsSheetMetalSafe = PartHasSheetMetalBody(swPart)
-
 End Function
 
 Function PartHasSheetMetalBody(swPart As Object) As Boolean
@@ -8192,29 +7979,22 @@ Function PartHasSheetMetalBody(swPart As Object) As Boolean
 End Function
 
 Function GetSheetMetalThickness(swPart As Object) As Double
-    Dim f As Object
-
+    Dim f As Object, count As Long
+    On Error GoTo Failed
     Set f = swPart.FirstFeature
-
-    Do While Not f Is Nothing
-
+    Do While Not f Is Nothing And count < 2048
+        count = count + 1
         If f.GetTypeName2 = "SheetMetal" Then
-
-            On Error Resume Next
-
-            GetSheetMetalThickness = f.GetDefinition.thickness * 1000
-
-            On Error GoTo 0
-
-            If GetSheetMetalThickness <= 0 Then GetSheetMetalThickness = GetBoundingThickness(swPart)
-            Exit Function
-
+            If FeatureSuppressionState(f) = 0 Then
+                GetSheetMetalThickness = f.GetDefinition.thickness * 1000#
+                Exit Function
+            End If
         End If
-
         Set f = f.GetNextFeature
-
     Loop
-
+    Exit Function
+Failed:
+    TraceRun "sheetmetal thickness-unavailable error=" & CStr(Err.Number)
 End Function
 
 
@@ -8228,106 +8008,45 @@ Function GetSheetMetalThicknessFallback(swPart As Object) As Double
 End Function
 
 Function IsThinPlateLike(swPart As Object) As Boolean
-
-    Dim t As Double
-
-    Dim boxThickness As Double
-
-    Dim w As Double
-
-    Dim longDim As Double
-
-    If Not GetSortedBoxDimsMM(swPart, boxThickness, w, longDim) Then
-
-        TraceRun "thin-filter reject=bounding-box-unavailable"
-
+    Dim t As Double, w As Double, longDim As Double
+    If Not GetPartFilterDimensions(swPart, t, w, longDim) Then
+        TraceRun "thin-filter reject=dimensions-unavailable"
         Exit Function
-
     End If
-
-    t = GetThinSolidThickness(swPart)
-
-    If t <= 0# Then t = boxThickness
-
-    Debug.Print "    Thin check dims mm: actual=" & Round(t, 2) & _
-                " bbox=" & Round(boxThickness, 2) & " x " & _
-                Round(w, 2) & " x " & Round(longDim, 2)
-
-    If t > THICKNESS_LIMIT Then
-
-        TraceRun "thin-filter reject=thickness-limit actual-mm=" & CStr(Round(t, 3)) & _
-                 " limit-mm=" & CStr(THICKNESS_LIMIT) & _
-                 " bbox-mm=" & CStr(Round(boxThickness, 3)) & "," & _
-                 CStr(Round(w, 3)) & "," & CStr(Round(longDim, 3))
-
+    If t > THICKNESS_LIMIT Or t <= 0# Then
+        TraceRun "thin-filter reject=thickness-limit actual-mm=" & CStr(t) & " limit-mm=" & CStr(THICKNESS_LIMIT)
         Exit Function
-
     End If
-
-    If t <= 0 Then
-
-        TraceRun "thin-filter reject=nonpositive-thickness actual-mm=" & _
-                 CStr(Round(t, 3)) & _
-                 " bbox-thickness-mm=" & CStr(Round(boxThickness, 3))
-
+    If w < t * THIN_PLATE_MIN_RATIO Or longDim < t * THIN_PLATE_MIN_RATIO Then
+        TraceRun "thin-filter reject=dimension-ratio width/t=" & CStr(w / t) & _
+                 " length/t=" & CStr(longDim / t) & " minimum=" & CStr(THIN_PLATE_MIN_RATIO)
         Exit Function
-
     End If
-
-    IsThinPlateLike = (w >= t * THIN_PLATE_MIN_RATIO And longDim >= t * THIN_PLATE_MIN_RATIO)
-
-    If Not IsThinPlateLike Then
-
-        Debug.Print "    Rejected thin solid: needs other dimensions >= " & THIN_PLATE_MIN_RATIO & "x thickness"
-
-        TraceRun "thin-filter reject=dimension-ratio thickness-mm=" & CStr(Round(t, 3)) & _
-                 " middle-mm=" & CStr(Round(w, 3)) & _
-                 " longest-mm=" & CStr(Round(longDim, 3)) & _
-                 " minimum-ratio=" & CStr(THIN_PLATE_MIN_RATIO)
-
-        Exit Function
-
-    End If
-
     If Not HasSheetLikePlanarFaces(swPart, w, longDim) Then
-
-        Debug.Print "    Rejected thin solid: mostly curved/noodle-like surface"
-
         TraceRun "thin-filter reject=planar-face-check"
-
-        IsThinPlateLike = False
-
-    Else
-
-        TraceRun "thin-filter accept thickness-mm=" & CStr(Round(t, 3)) & _
-                 " middle-mm=" & CStr(Round(w, 3)) & _
-                 " longest-mm=" & CStr(Round(longDim, 3))
-
+        Exit Function
     End If
-
+    IsThinPlateLike = True
+    TraceRun "thin-filter accept"
 End Function
 
 Function IsWasherLikeThinSolid(swPart As Object) As Boolean
-
-    Dim t As Double
-
-    Dim w As Double
-
-    Dim longDim As Double
-
-    If Not GetSortedBoxDimsMM(swPart, t, w, longDim) Then Exit Function
-
-    If t <= 0# Or longDim <= 0# Or w <= 0# Then Exit Function
-
-    Dim ratio As Double
-    Dim aspect As Double
-    ratio = longDim / t
-    aspect = w / longDim
-
-    IsWasherLikeThinSolid = (longDim < WASHERLIKE_MAX_LONG_MM) _
-                            And (ratio < WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO) _
-                            And (aspect >= WASHERLIKE_MIN_ASPECT)
-
+    Dim t As Double, w As Double, longDim As Double
+    If Not GetPartFilterDimensions(swPart, t, w, longDim) Then
+        TraceRun "washer-filter unknown=dimensions-unavailable"
+        Exit Function
+    End If
+    Dim ratio As Double, aspect As Double
+    Dim sizePass As Boolean, ratioPass As Boolean, aspectPass As Boolean
+    ratio = longDim / t: aspect = w / longDim
+    sizePass = (longDim <= WASHERLIKE_MAX_LONG_MM + 0.001)
+    ratioPass = (ratio <= WASHERLIKE_MAX_WIDTH_THICKNESS_RATIO + 0.000001)
+    aspectPass = (aspect >= WASHERLIKE_MIN_ASPECT - 0.000001)
+    IsWasherLikeThinSolid = sizePass And ratioPass And aspectPass
+    TraceRun "washer-filter result=" & CStr(IsWasherLikeThinSolid) & _
+             " length-mm=" & CStr(Round(longDim, 4)) & " size-pass=" & CStr(sizePass) & _
+             " length/t=" & CStr(Round(ratio, 4)) & " ratio-pass=" & CStr(ratioPass) & _
+             " width/length=" & CStr(Round(aspect, 4)) & " aspect-pass=" & CStr(aspectPass)
 End Function
 
 Private Function StripTrailingPathSeparator(ByVal folderPath As String) As String
@@ -8781,141 +8500,313 @@ Function GetBoundingThickness(swPart As Object) As Double
 End Function
 
 ' Reads a plane face's normal + a point on the plane via Surface.PlaneParams.
+' PlaneParams returns (rootX, rootY, rootZ, normalX, normalY, normalZ) in
+' some SW versions and (normalX, normalY, normalZ, rootX, rootY, rootZ) in
+' others. We normalize the normal and pick the layout whose normal length
+' is closer to 1.
 Function TryGetPlaneNormalAndPoint(swFace As Object, outNorm() As Double, _
                                    outPoint() As Double) As Boolean
+
     TryGetPlaneNormalAndPoint = False
+
     If swFace Is Nothing Then Exit Function
+
     Dim surf As Object
+
     On Error Resume Next
+
     Set surf = swFace.GetSurface
+
     On Error GoTo 0
+
     If surf Is Nothing Then Exit Function
+
     If Not surf.IsPlane Then Exit Function
+
     Dim params As Variant
+
     params = Empty
+
     On Error Resume Next
+
     params = surf.PlaneParams
+
     On Error GoTo 0
+
     If IsEmpty(params) Then Exit Function
+
     If UBound(params) < 5 Then Exit Function
+
+
+
     Dim aLen As Double
+
     aLen = Sqr(params(0) * params(0) + params(1) * params(1) + params(2) * params(2))
+
     Dim bLen As Double
+
     bLen = Sqr(params(3) * params(3) + params(4) * params(4) + params(5) * params(5))
+
+
+
     If Abs(aLen - 1#) <= Abs(bLen - 1#) Then
+
         outNorm(0) = params(0)
+
         outNorm(1) = params(1)
+
         outNorm(2) = params(2)
+
         outPoint(0) = params(3)
+
         outPoint(1) = params(4)
+
         outPoint(2) = params(5)
+
     Else
+
         outNorm(0) = params(3)
+
         outNorm(1) = params(4)
+
         outNorm(2) = params(5)
+
         outPoint(0) = params(0)
+
         outPoint(1) = params(1)
+
         outPoint(2) = params(2)
+
     End If
+
+
+
     Dim nLen As Double
+
     nLen = Sqr(outNorm(0) * outNorm(0) + outNorm(1) * outNorm(1) + outNorm(2) * outNorm(2))
+
     If nLen <= 0.000001 Then Exit Function
+
     outNorm(0) = outNorm(0) / nLen
+
     outNorm(1) = outNorm(1) / nLen
+
     outNorm(2) = outNorm(2) / nLen
+
+
+
+    ' Face2.FaceInSurfaceSense returns True when the face's outward normal is
+    ' opposite to the surface normal. Flip so we always get the face normal.
     Dim flip As Boolean
+
     flip = False
+
     On Error Resume Next
+
     flip = CBool(swFace.FaceInSurfaceSense)
+
     On Error GoTo 0
+
     If flip Then
+
         outNorm(0) = -outNorm(0)
+
         outNorm(1) = -outNorm(1)
+
         outNorm(2) = -outNorm(2)
+
     End If
+
+
+
     TryGetPlaneNormalAndPoint = True
+
 End Function
 
+' Perpendicular distance from a point to the plane defined by (planeNorm, planePoint).
 Function SignedPlaneDistance(planeNorm() As Double, planePoint() As Double, _
                              ByVal qx As Double, ByVal qy As Double, ByVal qz As Double) As Double
+
     SignedPlaneDistance = (qx - planePoint(0)) * planeNorm(0) _
                         + (qy - planePoint(1)) * planeNorm(1) _
                         + (qz - planePoint(2)) * planeNorm(2)
+
 End Function
 
+' Iterates all planar faces of a part. Returns the perpendicular span of the
+' part along the largest-planar-face's normal. This is the true slab
+' thickness of a thin solid, independent of how the part is oriented in
+' world coords. Returns 0 if no usable planar face is found.
 Function GetThicknessAlongLargestPlaneNormal(swPart As Object) As Double
+
     GetThicknessAlongLargestPlaneNormal = 0
+
     Dim faceMax As Object
+
     Set faceMax = FindLargestPlanarFace(swPart)
+
     If faceMax Is Nothing Then Exit Function
+
     Dim planeN(2) As Double
+
     Dim planeP(2) As Double
+
     If Not TryGetPlaneNormalAndPoint(faceMax, planeN, planeP) Then Exit Function
+
+
+
     Dim bodies As Variant
+
     bodies = GetPartBodies(swPart)
+
     If IsEmpty(bodies) Then Exit Function
+
+
+
     Dim minProj As Double
+
     Dim maxProj As Double
+
     Dim seen As Boolean
+
     seen = False
+
     minProj = 0
+
     maxProj = 0
+
+
+
     Dim bi As Long
+
     For bi = 0 To UBound(bodies)
+
         Dim b As Object
+
         Set b = bodies(bi)
+
         If b Is Nothing Then GoTo NextBody
+
+
+
         Dim faces As Variant
+
         faces = Empty
+
         On Error Resume Next
+
         faces = b.GetFaces
+
         On Error GoTo 0
+
         If IsEmpty(faces) Then GoTo NextBody
+
+
+
         Dim fi As Long
+
         For fi = 0 To UBound(faces)
+
             Dim f As Object
+
             Set f = faces(fi)
+
             If f Is Nothing Then GoTo NextFace
+
+
+
             Dim faceBox As Variant
+
             faceBox = Empty
+
             On Error Resume Next
+
             faceBox = f.GetBox
+
             On Error GoTo 0
+
             If IsEmpty(faceBox) Then GoTo NextFace
+
             If UBound(faceBox) < 5 Then GoTo NextFace
+
+
+
+            ' Project all 8 face-box corners onto the plane normal.
             Dim cx As Long
+
             For cx = 0 To 1
+
                 Dim cy As Long
+
                 For cy = 0 To 1
+
                     Dim cz As Long
+
                     For cz = 0 To 1
+
                         Dim px As Double
+
                         Dim py As Double
+
                         Dim pz As Double
+
                         px = faceBox(IIf(cx = 0, 0, 3))
+
                         py = faceBox(IIf(cy = 0, 1, 4))
+
                         pz = faceBox(IIf(cz = 0, 2, 5))
+
                         Dim sd As Double
+
                         sd = SignedPlaneDistance(planeN, planeP, px, py, pz)
+
                         If Not seen Then
+
                             minProj = sd
+
                             maxProj = sd
+
                             seen = True
+
                         Else
+
                             If sd < minProj Then minProj = sd
+
                             If sd > maxProj Then maxProj = sd
+
                         End If
+
                     Next cz
+
                 Next cy
+
             Next cx
+
 NextFace:
+
         Next fi
+
 NextBody:
+
     Next bi
+
+
+
     If Not seen Then Exit Function
+
     GetThicknessAlongLargestPlaneNormal = (maxProj - minProj) * 1000
+
 End Function
 
+' Public: pick the most reliable thickness for a thin solid part.
+' Priority chain:
+'   1) Exact body extents along the largest planar face normal, including
+'      curved and closed-edge geometry that vertex sampling can miss.
+'   2) Face-bbox projection (older method; can over-estimate by ~1 mm
+'      for chamfered/curved parts because face-bboxes are axis-aligned).
+'   3) World bounding box min-axis (last resort; orientation-dependent
+'      and was the original source of the thickness-classification bug for axis-aligned
+'      parts with features that extruded slightly past the main plate).
 Function GetThinSolidThickness(swPart As Object) As Double
     Dim thickness As Double
     thickness = GetThicknessViaBodyExtents(swPart)
@@ -8933,6 +8824,112 @@ Function GetThinSolidThickness(swPart As Object) As Double
         GetThinSolidThickness = GetBoundingThickness(swPart)
         TraceRun "thickness fallback=world-bounding-box mm=" & CStr(GetThinSolidThickness)
     End If
+End Function
+
+Function GetBodyAxisSpan(bodies As Variant, axis() As Double) As Double
+    Dim b As Object, i As Long
+    Dim x As Double, y As Double, z As Double
+    Dim lo As Double, hi As Double, value As Double
+    On Error GoTo Failed
+    lo = 1E+30: hi = -1E+30
+    For i = LBound(bodies) To UBound(bodies)
+        Set b = bodies(i)
+        If b Is Nothing Then Exit Function
+        If Not b.GetExtremePoint(axis(0), axis(1), axis(2), x, y, z) Then Exit Function
+        value = x * axis(0) + y * axis(1) + z * axis(2)
+        If value > hi Then hi = value
+        If Not b.GetExtremePoint(-axis(0), -axis(1), -axis(2), x, y, z) Then Exit Function
+        value = x * axis(0) + y * axis(1) + z * axis(2)
+        If value < lo Then lo = value
+    Next i
+    If hi > lo Then GetBodyAxisSpan = (hi - lo) * 1000#
+    Exit Function
+Failed:
+    TraceRun "geometry axis-extents unavailable error=" & CStr(Err.Number)
+End Function
+
+Function GetFaceFootprintAxis(face As Object, normal() As Double, axis() As Double) As Boolean
+    Dim edges As Variant, edge As Object, curve As Object
+    Dim startVertex As Object, endVertex As Object
+    Dim p As Variant, q As Variant, i As Long
+    Dim dx As Double, dy As Double, dz As Double, length As Double, longest As Double
+    Dim dot As Double
+    ' Align with a straight edge when available; circles need no edge vertices.
+    On Error GoTo FallbackAxis
+    edges = face.GetEdges
+    If Not IsEmpty(edges) Then
+        For i = LBound(edges) To UBound(edges)
+            Set edge = edges(i)
+            Set curve = edge.GetCurve
+            If curve.IsLine Then
+                Set startVertex = edge.GetStartVertex
+                Set endVertex = edge.GetEndVertex
+                If Not startVertex Is Nothing And Not endVertex Is Nothing Then
+                    p = startVertex.GetPoint: q = endVertex.GetPoint
+                    dx = q(0) - p(0): dy = q(1) - p(1): dz = q(2) - p(2)
+                    dot = dx * normal(0) + dy * normal(1) + dz * normal(2)
+                    dx = dx - dot * normal(0): dy = dy - dot * normal(1): dz = dz - dot * normal(2)
+                    length = Sqr(dx * dx + dy * dy + dz * dz)
+                    If length > longest Then
+                        longest = length
+                        axis(0) = dx / length: axis(1) = dy / length: axis(2) = dz / length
+                    End If
+                End If
+            End If
+        Next i
+    End If
+FallbackAxis:
+    If longest <= 0.0000001 Then
+        If Abs(normal(0)) < 0.8 Then
+            axis(0) = 0#: axis(1) = normal(2): axis(2) = -normal(1)
+        Else
+            axis(0) = -normal(2): axis(1) = 0#: axis(2) = normal(0)
+        End If
+        length = Sqr(axis(0) * axis(0) + axis(1) * axis(1) + axis(2) * axis(2))
+        If length <= 0.0000001 Then Exit Function
+        axis(0) = axis(0) / length: axis(1) = axis(1) / length: axis(2) = axis(2) / length
+    End If
+    GetFaceFootprintAxis = True
+End Function
+
+Function GetBodiesPlateDimensions(bodies As Variant, ByRef t As Double, _
+                                  ByRef w As Double, ByRef longest As Double) As Boolean
+    Dim face As Object
+    Dim n(2) As Double, p(2) As Double, u(2) As Double, v(2) As Double
+    Dim swapValue As Double
+    If IsEmpty(bodies) Then Exit Function
+    Set face = FindLargestPlanarFaceInBodies(bodies)
+    If face Is Nothing Then Exit Function
+    If Not TryGetPlaneNormalAndPoint(face, n, p) Then Exit Function
+    If Not GetFaceFootprintAxis(face, n, u) Then Exit Function
+    v(0) = n(1) * u(2) - n(2) * u(1)
+    v(1) = n(2) * u(0) - n(0) * u(2)
+    v(2) = n(0) * u(1) - n(1) * u(0)
+    t = GetBodyAxisSpan(bodies, n)
+    w = GetBodyAxisSpan(bodies, u)
+    longest = GetBodyAxisSpan(bodies, v)
+    If w > longest Then
+        swapValue = w: w = longest: longest = swapValue
+    End If
+    GetBodiesPlateDimensions = (t > 0.001 And w > 0.001 And longest > 0.001)
+End Function
+
+Function GetPartFilterDimensions(swPart As Object, ByRef t As Double, _
+                                 ByRef w As Double, ByRef longest As Double) As Boolean
+    Dim bodies As Variant, boxThickness As Double
+    bodies = GetPartBodies(swPart)
+    If GetBodiesPlateDimensions(bodies, t, w, longest) Then
+        GetPartFilterDimensions = True
+        TraceRun "geometry source=face-aligned-body-extents t-mm=" & CStr(Round(t, 4)) & _
+                 " width-mm=" & CStr(Round(w, 4)) & " length-mm=" & CStr(Round(longest, 4))
+        Exit Function
+    End If
+    If Not GetSortedBoxDimsMM(swPart, boxThickness, w, longest) Then Exit Function
+    t = GetThinSolidThickness(swPart)
+    If t <= 0# Then t = boxThickness
+    GetPartFilterDimensions = (t > 0# And w > 0# And longest > 0#)
+    TraceRun "geometry fallback=world-footprint-with-normal-thickness t-mm=" & CStr(t) & _
+             " width-mm=" & CStr(w) & " length-mm=" & CStr(longest)
 End Function
 
 Function GetThicknessViaBodyExtents(swPart As Object) As Double
@@ -8989,12 +8986,16 @@ End Function
 Function FormatThickness(v As Double) As String
 
     ' Round to nearest whole millimeter, half goes up.
+    '   12.0 -> 12   12.4 -> 12   12.5 -> 13   12.9 -> 13
+
     Dim n As Long
+
     If v <= 0 Then
         n = 0
     Else
         n = Int(v + 0.5)
     End If
+
     FormatThickness = CStr(n)
 
 End Function
