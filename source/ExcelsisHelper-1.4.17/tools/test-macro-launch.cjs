@@ -55,11 +55,13 @@ async function test() {
   };
   vm.createContext(context);
   vm.runInContext([
+    between(main, "const DEFAULT_MACRO_SHORTCUTS", "const DEFAULT_AUTOMATION_SETTINGS"),
+    between(main, "function cleanString", "function normalizeGcodeOutputSuffix"),
     between(main, "const COMPILED_MACRO_MODULE_NAMES", "const VBA_IDENTIFIER"),
     between(main, "async function listSolidWorksMacros()", "function solidWorksBridgePath()"),
-    between(main, "const HOTKEY_HELPER_EVENT_AUTO_RADIUS", "function handleHotkeyHelperLine"),
+    between(main, "const HOTKEY_HELPER_EVENT_MACRO", "const solidWorksWatcherHelper"),
     between(main, 'trustedIpcHandle("automation:run-macro"', 'trustedIpcHandle("automation:list-macro-tiles"'),
-    "this.api = { listSolidWorksMacros, runAutoRadiusFromHotkey };",
+    "this.api = { listSolidWorksMacros, runMacroFromHotkey, configureMacroHotkeyBindings, handleHotkeyHelperLine };",
   ].join("\n"), context);
 
   const tiles = (await context.api.listSolidWorksMacros()).macros;
@@ -77,15 +79,46 @@ async function test() {
   const count = calls.length;
   assert.equal((await runMacro({}, { filePath: radius.path, moduleName: "bad.name" })).ok, false);
   assert.equal(calls.length, count);
-  await context.api.runAutoRadiusFromHotkey();
+  const radiusBinding = { macro: "Radius_v9.swp", shortcut: "Alt+R" };
+  const dxfBinding = { macro: "DXF_v16.swp", shortcut: "Alt+D" };
+  await context.api.runMacroFromHotkey(radiusBinding);
   assert.equal(moduleArg(calls.at(-1)), "Test11", "Shortcut must use the same compiled module");
   context.isMacroRecentDocSuppressionActive = async () => true;
-  await context.api.runAutoRadiusFromHotkey();
+  await context.api.runMacroFromHotkey(dxfBinding);
   assert.equal(calls.length, count + 1, "Active macro gate must suppress the shortcut");
   context.isMacroRecentDocSuppressionActive = async () => false;
-  await Promise.all([context.api.runAutoRadiusFromHotkey(), context.api.runAutoRadiusFromHotkey()]);
-  assert.equal(calls.length, count + 2, "Repeated shortcut must not overlap");
-  assert.doesNotMatch(between(main, "async function runAutoRadiusFromHotkey", "function handleHotkeyHelperLine"),
+  await Promise.all([context.api.runMacroFromHotkey(radiusBinding), context.api.runMacroFromHotkey(dxfBinding)]);
+  assert.equal(calls.length, count + 2, "Different macro shortcuts must not overlap either");
+  await context.api.runMacroFromHotkey(dxfBinding);
+  assert.equal(moduleArg(calls.at(-1)), "DXF_v161");
+  assert.ok(calls.at(-1).includes(`${macroRoot}\\DXF_v16.swp`), "Regular DXF, never RO or CNC DXF");
+  await context.api.runMacroFromHotkey({ macro: "Custom\\User.swp", shortcut: "Alt+U" });
+  assert.equal(moduleArg(calls.at(-1)), "", "Custom macros use bridge method discovery");
+  let before = calls.length;
+  await context.api.runMacroFromHotkey({ macro: "..\\Outside.swp", shortcut: "Alt+U" });
+  context.pathExists = async () => false;
+  await context.api.runMacroFromHotkey(dxfBinding);
+  context.pathExists = async () => true;
+  context.fs.realpath = async (file) => /DXF_v16/.test(file) ? "C:\\Outside\\DXF_v16.swp" : file;
+  await context.api.runMacroFromHotkey(dxfBinding);
+  assert.equal(calls.length, before, "Traversal, missing macros and symlink escape must not run");
+  context.fs.realpath = async (file) => file;
+  const ids = context.api.configureMacroHotkeyBindings({ macroShortcuts: [radiusBinding, dxfBinding] });
+  await context.api.handleHotkeyHelperLine(`EXCELSIS_HOTKEY_EVENT:macro:${ids[1].id}`);
+  assert.equal(moduleArg(calls.at(-1)), "DXF_v161");
+  before = calls.length;
+  context.api.configureMacroHotkeyBindings({ macroShortcuts: [{ macro: "BOM_v19.swp", shortcut: "Alt+D" }] });
+  await context.api.handleHotkeyHelperLine(`EXCELSIS_HOTKEY_EVENT:macro:${ids[1].id}`);
+  await context.api.handleHotkeyHelperLine("EXCELSIS_HOTKEY_EVENT:macro:unknown");
+  await context.api.handleHotkeyHelperLine("EXCELSIS_HOTKEY_EVENT:auto-radius");
+  assert.equal(calls.length, before, "Unknown, stale and retired events are ignored");
+  context.api.configureMacroHotkeyBindings({ enabled: false, macroShortcuts: [radiusBinding, dxfBinding] });
+  await context.api.handleHotkeyHelperLine(`EXCELSIS_HOTKEY_EVENT:macro:${ids[0].id}`);
+  context.isQuitting = true;
+  await context.api.runMacroFromHotkey(radiusBinding);
+  context.isQuitting = false;
+  assert.equal(calls.length, before, "Disabled and quitting states do not launch");
+  assert.doesNotMatch(between(main, "async function runMacroFromHotkey", "function handleHotkeyHelperLine"),
     /\.show\(|\.focus\(|showMainWindow|createWindow/);
 
   if (process.platform === "win32") {

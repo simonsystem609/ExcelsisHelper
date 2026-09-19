@@ -1,6 +1,6 @@
 # Source and Asset Provenance
 
-This inventory covers Excelsis Helper 1.4.16.
+This inventory covers Excelsis Helper 1.4.17.
 
 ## Project-owned work
 
@@ -21,6 +21,7 @@ redistributable SOLIDWORKS/SolidCAM binaries.
 
 | Macro | Origin | Borrowed material |
 |---|---|---|
+| BackupAssembly_v1.swb | Project-created assembly backup macro | SOLIDWORKS API interoperability only |
 | BOM_v19.swb | Project-owned original | None identified |
 | BOM_v19_ROfriendy.swb | Project-generated read-only variant | Internal source only |
 | CNCDXF_v1.swb | Project-created macro | Alignment vector reused from project-owned DXF_v16.swb |
@@ -29,11 +30,15 @@ redistributable SOLIDWORKS/SolidCAM binaries.
 | DXF_v16_ROfriendy.swb | Project-generated read-only variant | Internal source only |
 | PDF_v1.swb | Project-created drawing PDF exporter | SOLIDWORKS API interoperability only |
 | Radius_v9.swb | Project-owned original | None identified |
-| BackupAssembly_v1.swb | Project-created assembly backup | SOLIDWORKS API interoperability only |
 
 The installer contains compiled `.swp` forms of these nine project-owned
 macros. Matching readable SWB source and build-ready SWP artifacts are both
 included in corresponding source; only SWPs are deployed at runtime.
+`CNCDXF_v1.swb` corresponds to the renamed `CNCDXF_final_v1.swp`.
+
+Configurable macro shortcuts and the DXF selection, cleanup, preflight and
+incremental-export changes are project-authored. They add no runtime library,
+third-party binary or vendor fixture. Offline tests use synthetic CAD doubles.
 
 CrawlScrews_v1 remains in the public build as an opt-in feature. Its wording is
 vendor-neutral, its output stays local, and both the app and the macro provide

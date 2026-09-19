@@ -1,6 +1,6 @@
 {
   "name": "excelsis-helper",
-  "version": "1.4.16",
+  "version": "1.4.17",
   "description": "SOLIDWORKS workflow helper.",
   "author": "Excelsis contributors",
   "license": "GPL-3.0-only",
@@ -11,7 +11,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "test": "npm run test:settings && npm run test:worklogger && npm run test:export && npm run test:gcode && npm run test:machining && npm run test:preview && npm run test:ecoqos && npm run test:hardening",
-    "test:settings": "node tools/test-settings-config.cjs && node tools/test-macro-settings-sync.cjs && node tools/test-macro-launch.cjs && node tools/test-macro-privacy.cjs && node tools/test-radius-macro.cjs && node tools/test-dxf-macro-filters.cjs && node tools/test-macro-export-folder.cjs && node tools/test-recent-doc-suppression.cjs && node tools/test-recent-doc-maintenance.cjs",
+    "test:settings": "node tools/test-settings-config.cjs && node tools/test-macro-settings-sync.cjs && node tools/test-macro-launch.cjs && node tools/test-macro-hotkey-helper.cjs && node tools/test-macro-privacy.cjs && node tools/test-radius-macro.cjs && node tools/test-dxf-macro-filters.cjs && node tools/test-dxf-macro-lifecycle.cjs && node tools/test-macro-export-folder.cjs && node tools/test-recent-doc-suppression.cjs && node tools/test-recent-doc-maintenance.cjs",
     "test:worklogger": "node tools/test-worklogger-unsaved.cjs && node tools/test-worklogging-settings.cjs && node tools/test-solidworks-watcher.cjs",
     "test:export": "node tools/test-worklog-export.cjs",
     "test:gcode": "node tools/test-gcode-parser.cjs",

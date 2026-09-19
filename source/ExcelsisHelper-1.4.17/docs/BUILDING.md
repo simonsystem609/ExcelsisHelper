@@ -10,10 +10,11 @@
 - EJS 6.0.1, pinned as a build-only override
 - fast-uri 3.1.7, xmldom 0.8.15, js-yaml 4.3.2
 
-This 1.4.16 source integrates the packaging/export-folder delta dated
-2026-09-10 and the previously separate Radius patch. The old 1.4.14 installer
-does not contain these changes. Repeat packaged-runtime, macro deployment and
-installer checks for the combined release; source tests alone are insufficient.
+This 1.4.17 source integrates configurable macro shortcuts and the latest DXF
+preflight, incremental-export, selection and cleanup fixes, together with the
+previous packaging/export-folder and Radius patches. Repeat packaged-runtime,
+macro deployment and installer checks for this combined release; source tests
+alone are insufficient.
 Interactive setup starts the de-elevated app with `--after-install`. Failed
 macro or runtime-settings deployment shows a native warning with Retry and
 Later, including instructions to save work and close SOLIDWORKS. A successful
@@ -77,8 +78,8 @@ unchanged. SWPs are scanned as Latin-1 and at both UTF-16 byte alignments.
 Do not launch the application merely to inspect a package. The build creates
 one universal, preset-free installer:
 
-- dist\Excelsis Helper-Setup-1.4.16.exe
-- dist\Excelsis Helper-Setup-1.4.16.exe.blockmap
+- dist\Excelsis Helper-Setup-1.4.17.exe
+- dist\Excelsis Helper-Setup-1.4.17.exe.blockmap
 - dist\win-unpacked\
 
 An optional `ExcelsisHelper-settings.json` beside the setup EXE uses the same
@@ -89,8 +90,8 @@ sidecar is never embedded in the setup EXE.
 ## Non-launching verification
 
 ~~~powershell
-Get-FileHash -Algorithm SHA256 '.\dist\Excelsis Helper-Setup-1.4.16.exe'
-Get-AuthenticodeSignature '.\dist\Excelsis Helper-Setup-1.4.16.exe'
+Get-FileHash -Algorithm SHA256 '.\dist\Excelsis Helper-Setup-1.4.17.exe'
+Get-AuthenticodeSignature '.\dist\Excelsis Helper-Setup-1.4.17.exe'
 node -e "import('@electron/asar').then(a => console.log(JSON.parse(a.extractFile('dist/win-unpacked/resources/app.asar','package.json')).version))"
 node tools\audit-packaged-runtime.cjs "dist\win-unpacked\Excelsis Helper.exe"
 ~~~

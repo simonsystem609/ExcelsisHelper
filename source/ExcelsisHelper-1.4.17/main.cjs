@@ -793,6 +793,7 @@ const COMPILED_MACRO_MODULE_NAMES = Object.freeze({
   // SWPs retain their template's internal module name when source is replaced.
   "backupassembly_v1.swp": "Test11",
   "radius_v9.swp": "Test11",
+  "dxf_v16.swp": "DXF_v161",
   // PDF_v1 retains the reviewed DXF_v161 module identity.
   "pdf_v1.swp": "DXF_v161",
 });
@@ -5837,6 +5838,11 @@ async function trackProjectActivityFromStatus(bridgeResult, options = {}) {
 
 const DEFAULT_CAM_ROOT = path.join(os.homedir(), "Documents", "CAM");
 
+const DEFAULT_MACRO_SHORTCUTS = [
+  { macro: "Radius_v9.swp", shortcut: "Alt+R" },
+  { macro: "DXF_v16.swp", shortcut: "Alt+D" },
+];
+
 const DEFAULT_AUTOMATION_SETTINGS = {
   uiLanguage: "en",
   bomExportLanguage: "en",
@@ -5844,7 +5850,7 @@ const DEFAULT_AUTOMATION_SETTINGS = {
     enabled: true,
     pasteProjectDate: "Ctrl+Space",
     copyExplorerPath: "F7,F7",
-    autoRadius: "Alt+R",
+    macroShortcuts: DEFAULT_MACRO_SHORTCUTS,
     projectPrefix: "PRJ-",
     projectDateTemplate: "PRJ-[currentdate]",
     projectDateFormat: "yyyy.MM.dd",
@@ -5960,7 +5966,7 @@ function normalizeCopyPathHotkey(value, fallback) {
   return ["space+c", "c,c", "x,x"].includes(key) ? fallback : normalized;
 }
 
-function normalizeAutoRadiusHotkey(value, fallback) {
+function normalizeMacroHotkey(value, fallback = "") {
   const raw = cleanString(value);
   if (!raw || raw.includes(",")) return fallback;
 
@@ -5979,13 +5985,11 @@ function normalizeAutoRadiusHotkey(value, fallback) {
     ["win", "Win"],
     ["windows", "Win"],
   ]);
-  const modifiers = [];
   const seenModifiers = new Set();
   for (const part of parts.slice(0, -1)) {
     const modifier = modifierNames.get(part.toLowerCase());
     if (!modifier || seenModifiers.has(modifier)) return fallback;
     seenModifiers.add(modifier);
-    modifiers.push(modifier);
   }
 
   const triggerRaw = parts[parts.length - 1].toUpperCase();
@@ -6017,7 +6021,45 @@ function normalizeAutoRadiusHotkey(value, fallback) {
     : /^F(?:[1-9]|1\d|2[0-4])$/.test(triggerRaw)
       ? triggerRaw
       : triggerAliases.get(triggerRaw);
-  return trigger ? [...modifiers, trigger].join("+") : fallback;
+  return trigger ? [...["Ctrl", "Alt", "Shift", "Win"].filter((name) => seenModifiers.has(name)), trigger].join("+") : fallback;
+}
+
+function normalizeMacroShortcuts(value, legacyRadius) {
+  let rows = value;
+  if (!Array.isArray(rows)) {
+    rows = DEFAULT_MACRO_SHORTCUTS.map((row) => ({ ...row }));
+    if (legacyRadius !== undefined) {
+      rows[0].shortcut = normalizeMacroHotkey(legacyRadius, "Alt+R");
+      // Preserve a user's old Radius binding without assigning DXF the same key.
+      if (rows[0].shortcut === rows[1].shortcut) rows.pop();
+    }
+  }
+  return rows.slice(0, 33).map((row) => ({
+    macro: cleanString(row?.macro).replace(/\//g, "\\"),
+    shortcut: normalizeMacroHotkey(row?.shortcut) || cleanString(row?.shortcut),
+  }));
+}
+
+function isSafeMacroShortcutPath(value) {
+  if (typeof value !== "string" || !value || value.length > 260 || !/\.swp$/i.test(value)) return false;
+  return value.split(/[\\/]/).every((segment) => segment && segment !== "." && segment !== ".."
+    && !/[<>:"|?*\x00-\x1f]/.test(segment) && !/[ .]$/.test(segment));
+}
+
+function validateMacroShortcuts(hotkeys) {
+  const rows = hotkeys.macroShortcuts;
+  if (!Array.isArray(rows) || rows.length > 32) throw new Error("Use at most 32 macro shortcuts.");
+  const used = new Set([
+    normalizeMacroHotkey(hotkeys.pasteProjectDate),
+    normalizeMacroHotkey(hotkeys.copyExplorerPath),
+  ].filter(Boolean));
+  for (const row of rows) {
+    if (!isSafeMacroShortcutPath(row.macro)) throw new Error("Choose a SWP macro inside the Macro Runner folder.");
+    const shortcut = normalizeMacroHotkey(row.shortcut);
+    if (!shortcut) throw new Error(`Invalid shortcut for ${row.macro}. Use a modifier and a key, such as Alt+D.`);
+    if (used.has(shortcut)) throw new Error(`Shortcut ${shortcut} is assigned more than once. Choose a different combination.`);
+    used.add(shortcut);
+  }
 }
 
 function normalizeGcodeOutputSuffix(value, fallback) {
@@ -6050,7 +6092,7 @@ function mergeAutomationSettings(raw = {}) {
         defaults.hotkeys.pasteProjectDate,
       ),
       copyExplorerPath: normalizeCopyPathHotkey(hotkeys.copyExplorerPath, defaults.hotkeys.copyExplorerPath),
-      autoRadius: normalizeAutoRadiusHotkey(hotkeys.autoRadius, defaults.hotkeys.autoRadius),
+      macroShortcuts: normalizeMacroShortcuts(hotkeys.macroShortcuts, hotkeys.autoRadius),
       projectPrefix: cleanString(hotkeys.projectPrefix ?? hotkeys.sztPrefix) || defaults.hotkeys.projectPrefix,
       projectDateTemplate: cleanString(hotkeys.projectDateTemplate ?? hotkeys.sztTemplate)
         || defaults.hotkeys.projectDateTemplate,
@@ -6148,6 +6190,7 @@ function mergeAutomationSettings(raw = {}) {
 }
 
 function validateAutomationSettingsPaths(settings) {
+  validateMacroShortcuts(settings.hotkeys);
   const worklogUserName = cleanString(settings.erp?.worklogUserName);
   // An optional ERP display name defaults to the Windows user at export time.
   if (worklogUserName.length > 200) throw new Error("ERP worklog user name is too long.");
@@ -6229,6 +6272,10 @@ function migrateSettingsAliases(settings) {
   const migrated = mergeSettingsLayers(settings);
   if (isPlainSettingsObject(migrated.hotkeys)) {
     const hotkeys = migrated.hotkeys;
+    if (!Array.isArray(hotkeys.macroShortcuts) && hotkeys.autoRadius !== undefined) {
+      hotkeys.macroShortcuts = normalizeMacroShortcuts(undefined, hotkeys.autoRadius);
+    }
+    delete hotkeys.autoRadius;
     const aliases = [
       ["pasteProjectDate", "pasteSztDate"],
       ["projectPrefix", "sztPrefix"],
@@ -7454,25 +7501,43 @@ function hotkeyHelperScriptPath() {
   return assetPath("scripts", "hotkey-helper.ps1");
 }
 
-const HOTKEY_HELPER_EVENT_AUTO_RADIUS = "EXCELSIS_HOTKEY_EVENT:auto-radius";
-let autoRadiusHotkeyRunInFlight = false;
+const HOTKEY_HELPER_EVENT_MACRO = "EXCELSIS_HOTKEY_EVENT:macro:";
+let activeMacroHotkeyBindings = new Map();
+let macroHotkeyRunInFlight = false;
 
-async function runAutoRadiusFromHotkey() {
-  if (isQuitting || autoRadiusHotkeyRunInFlight) {
-    logActivity("auto-radius-hotkey-skipped", { reason: isQuitting ? "quitting" : "already-running" });
+function configureMacroHotkeyBindings(hotkeys) {
+  activeMacroHotkeyBindings = new Map();
+  if (hotkeys.enabled === false) return [];
+  try {
+    validateMacroShortcuts(hotkeys);
+  } catch (error) {
+    logActivity("macro-hotkeys-disabled", { error: error.message });
+    return [];
+  }
+  return hotkeys.macroShortcuts.map((binding) => {
+    const id = crypto.createHash("sha256").update(JSON.stringify(binding)).digest("hex").slice(0, 24);
+    activeMacroHotkeyBindings.set(id, { ...binding });
+    return { id, shortcut: binding.shortcut };
+  });
+}
+
+async function runMacroFromHotkey(binding) {
+  if (!binding || !isSafeMacroShortcutPath(binding.macro)) return;
+  if (isQuitting || macroHotkeyRunInFlight) {
+    logActivity("macro-hotkey-skipped", { reason: isQuitting ? "quitting" : "already-running", macro: binding.macro });
     return;
   }
-  autoRadiusHotkeyRunInFlight = true;
+  macroHotkeyRunInFlight = true;
   try {
     if (await isMacroRecentDocSuppressionActive()) {
-      logActivity("auto-radius-hotkey-skipped", { reason: "macro-already-running" });
+      logActivity("macro-hotkey-skipped", { reason: "macro-already-running", macro: binding.macro });
       return;
     }
 
     const macroRoot = await ensureBundledMacros();
-    const requestedMacroPath = path.resolve(macroRoot, "Radius_v9.swp");
+    const requestedMacroPath = path.resolve(macroRoot, binding.macro);
     if (!(await pathExists(requestedMacroPath)) || !isInsideFolderOrEqual(requestedMacroPath, macroRoot)) {
-      logActivity("auto-radius-hotkey-failed", { error: "Radius_v9.swp is missing from the macro folder." });
+      logActivity("macro-hotkey-failed", { error: `${binding.macro} is missing from the macro folder.` });
       return;
     }
 
@@ -7481,29 +7546,32 @@ async function runAutoRadiusFromHotkey() {
       fs.realpath(macroRoot),
     ]);
     if (!isInsideFolderOrEqual(macroPath, realMacroRoot)) {
-      logActivity("auto-radius-hotkey-failed", { error: "Radius_v9.swp resolves outside the macro folder." });
+      logActivity("macro-hotkey-failed", { error: `${binding.macro} resolves outside the macro folder.` });
       return;
     }
 
-    logActivity("auto-radius-hotkey-start", { macroPath });
+    logActivity("macro-hotkey-start", { macroPath });
     const result = await runSolidWorksMacroBridge([
       "-Action", "run",
       "-MacroPath", macroPath,
-      "-ModuleName", COMPILED_MACRO_MODULE_NAMES["radius_v9.swp"],
+      "-ModuleName", COMPILED_MACRO_MODULE_NAMES[path.basename(macroPath).toLowerCase()] || "",
       "-ProcedureName", "main",
     ]);
-    logActivity("auto-radius-hotkey-end", { ok: !!result?.ok, error: result?.error || "" });
+    logActivity("macro-hotkey-end", { macroPath, ok: !!result?.ok, error: result?.error || "" });
   } catch (error) {
-    logActivity("auto-radius-hotkey-failed", { error: error.message });
+    logActivity("macro-hotkey-failed", { macro: binding.macro, error: error.message });
   } finally {
-    autoRadiusHotkeyRunInFlight = false;
+    macroHotkeyRunInFlight = false;
   }
 }
 
 function handleHotkeyHelperLine(line) {
-  if (String(line || "").trim() !== HOTKEY_HELPER_EVENT_AUTO_RADIUS) return;
-  runAutoRadiusFromHotkey().catch((error) => {
-    logActivity("auto-radius-hotkey-failed", { error: error.message });
+  const event = String(line || "").trim();
+  if (!event.startsWith(HOTKEY_HELPER_EVENT_MACRO)) return;
+  const binding = activeMacroHotkeyBindings.get(event.slice(HOTKEY_HELPER_EVENT_MACRO.length));
+  if (!binding) return;
+  return runMacroFromHotkey(binding).catch((error) => {
+    logActivity("macro-hotkey-failed", { error: error.message });
   });
 }
 
@@ -7542,6 +7610,7 @@ const hotkeyHelper = createManagedHelper({
       ...defaults,
       ...(hotkeys && typeof hotkeys === "object" ? hotkeys : {}),
     };
+    const macroShortcuts = configureMacroHotkeyBindings(cfg);
     if (cfg.enabled === false || process.platform !== "win32") return null;
     return {
       command: POWERSHELL_EXE,
@@ -7549,7 +7618,7 @@ const hotkeyHelper = createManagedHelper({
         "-File", hotkeyHelperScriptPath(),
         "-PasteHotkey", cfg.pasteProjectDate || defaults.pasteProjectDate,
         "-CopyPathHotkey", cfg.copyExplorerPath || defaults.copyExplorerPath,
-        "-AutoRadiusHotkey", cfg.autoRadius || defaults.autoRadius,
+        "-MacroShortcutsBase64", Buffer.from(JSON.stringify(macroShortcuts), "utf8").toString("base64"),
         "-Prefix", cfg.projectPrefix || defaults.projectPrefix,
         "-Template", cfg.projectDateTemplate || defaults.projectDateTemplate,
         "-DateFormat", cfg.projectDateFormat || defaults.projectDateFormat,
@@ -7570,7 +7639,7 @@ function maybeRestartActivityWatcher() { activityWatcherHelper.maybeRestart(); }
 function stopActivityWatcher() { activityWatcherHelper.stop(); }
 function killStrayHotkeyHelpers() { return hotkeyHelper.killStrays(); }
 function startHotkeyHelper(hotkeys = {}) { hotkeyHelper.start(hotkeys); }
-function stopHotkeyHelper() { hotkeyHelper.stop(); }
+function stopHotkeyHelper() { activeMacroHotkeyBindings.clear(); hotkeyHelper.stop(); }
 function restartHotkeyHelper(hotkeys = {}) { hotkeyHelper.restart(hotkeys); }
 
 // Spawn-free reads of the two helper-written status files (BOM handling and

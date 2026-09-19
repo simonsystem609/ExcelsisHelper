@@ -30,7 +30,9 @@ function sourceBetween(startMarker, endMarker) {
 
 const settingsContext = {};
 vm.createContext(settingsContext);
-vm.runInContext(`${sourceBetween(
+vm.runInContext(`${sourceBetween("const DEFAULT_MACRO_SHORTCUTS", "const DEFAULT_AUTOMATION_SETTINGS")}
+${sourceBetween("function cleanString", "function normalizeGcodeOutputSuffix")}
+${sourceBetween(
   "const SETTINGS_BLOCKED_KEYS",
   "async function readSettingsDocument",
 )}\nthis.testApi = { mergeSettingsLayers, migrateSettingsAliases, settingsPayloadFromDocument };`, settingsContext);
@@ -63,30 +65,62 @@ assert.match(source, /diagnostics:\s*\{\s*enabled:\s*false\s*,?\s*\}/);
 assert.match(source, /enabled:\s*diagnostics\.enabled === true/);
 assert.match(rendererHtml, /id="settingsDiagnosticsEnabled"[^>]*type="checkbox"/);
 assert.match(rendererSource, /enabled:\s*ui\.settingsDiagnosticsEnabled\?\.checked === true/);
-assert.match(source, /autoRadius:\s*"Alt\+R"/);
-assert.match(source, /autoRadius:\s*normalizeAutoRadiusHotkey\(/);
-assert.match(source, /"-AutoRadiusHotkey",\s*cfg\.autoRadius/);
-assert.match(source, /EXCELSIS_HOTKEY_EVENT:auto-radius/);
-assert.match(rendererHtml, /id="settingsAutoRadiusHotkey"[^>]*placeholder="Alt\+R"/);
-assert.match(rendererHtml, /id="autoRadiusShortcutNote"/);
-assert.match(rendererSource, /autoRadius:\s*\(ui\.settingsAutoRadiusHotkey/);
+assert.match(source, /macro: "Radius_v9.swp", shortcut: "Alt\+R"/);
+assert.match(source, /macro: "DXF_v16.swp", shortcut: "Alt\+D"/);
+assert.match(source, /macroShortcuts:\s*normalizeMacroShortcuts\(/);
+assert.match(source, /"-MacroShortcutsBase64", Buffer.from\(JSON.stringify\(macroShortcuts\)/);
+assert.match(source, /EXCELSIS_HOTKEY_EVENT:macro:/);
+assert.match(rendererHtml, /id="settingsMacroShortcuts"/);
+assert.match(rendererHtml, /id="macroShortcutNotes"/);
+assert.match(rendererSource, /macroShortcuts:\s*readMacroShortcutRows\(\)/);
 assert.match(hotkeyHelperSource, /EVENT_SYSTEM_FOREGROUND/);
 assert.match(hotkeyHelperSource, /ForegroundProcessIsSolidWorks/);
-assert.match(hotkeyHelperSource, /EXCELSIS_HOTKEY_EVENT:auto-radius/);
+assert.match(hotkeyHelperSource, /EXCELSIS_HOTKEY_EVENT:macro:/);
 
 const hotkeyContext = {};
 vm.createContext(hotkeyContext);
-vm.runInContext(`${sourceBetween(
+vm.runInContext(`${sourceBetween("const DEFAULT_MACRO_SHORTCUTS", "const DEFAULT_AUTOMATION_SETTINGS")}
+${sourceBetween(
   "function cleanString",
   "function normalizeGcodeOutputSuffix",
-)}\nthis.normalizeAutoRadiusHotkey = normalizeAutoRadiusHotkey;`, hotkeyContext);
-const normalizeAutoRadiusHotkey = hotkeyContext.normalizeAutoRadiusHotkey;
-assert.equal(normalizeAutoRadiusHotkey("Alt+R", "Alt+R"), "Alt+R");
-assert.equal(normalizeAutoRadiusHotkey("control + shift + f8", "Alt+R"), "Ctrl+Shift+F8");
-assert.equal(normalizeAutoRadiusHotkey("Windows+PageDown", "Alt+R"), "Win+PageDown");
+)}\nthis.api = { normalizeMacroHotkey, normalizeMacroShortcuts, validateMacroShortcuts };`, hotkeyContext);
+const { normalizeMacroHotkey, normalizeMacroShortcuts, validateMacroShortcuts } = hotkeyContext.api;
+assert.equal(normalizeMacroHotkey("Alt+R", "Alt+R"), "Alt+R");
+assert.equal(normalizeMacroHotkey("control + shift + f8", "Alt+R"), "Ctrl+Shift+F8");
+assert.equal(normalizeMacroHotkey("Windows+PageDown", "Alt+R"), "Win+PageDown");
+assert.equal(normalizeMacroHotkey("shift+alt+d"), "Alt+Shift+D");
 for (const invalid of ["R", "F7,F7", "R+Alt", "Alt+R,R", "Alt+F25", "Alt+NoSuchKey", "Alt+Alt+R"]) {
-  assert.equal(normalizeAutoRadiusHotkey(invalid, "Alt+R"), "Alt+R", `${invalid} must use the fallback`);
+  assert.equal(normalizeMacroHotkey(invalid, "Alt+R"), "Alt+R", `${invalid} must use the fallback`);
 }
+const defaultShortcuts = normalizeMacroShortcuts();
+assert.equal(defaultShortcuts.length, 2);
+assert.equal(defaultShortcuts[1].macro, "DXF_v16.swp");
+assert.equal(defaultShortcuts[1].shortcut, "Alt+D");
+assert.equal(normalizeMacroShortcuts([]).length, 0, "Removing all bindings persists");
+const migratedRadius = migrateSettingsAliases({ hotkeys: { autoRadius: "Ctrl+Shift+R" } });
+assert.equal(migratedRadius.hotkeys.macroShortcuts[0].shortcut, "Ctrl+Shift+R");
+assert.equal(migratedRadius.hotkeys.macroShortcuts[1].shortcut, "Alt+D");
+assert.equal("autoRadius" in migratedRadius.hotkeys, false);
+assert.equal(migrateSettingsAliases({ hotkeys: { autoRadius: "Alt+D" } }).hotkeys.macroShortcuts.length, 1);
+assert.equal(migrateSettingsAliases({ hotkeys: { autoRadius: "Alt+R", macroShortcuts: [] } }).hotkeys.macroShortcuts.length, 0);
+const validateBindings = (macroShortcuts, extra = {}) => validateMacroShortcuts({
+  pasteProjectDate: "Ctrl+Space", copyExplorerPath: "F7,F7", ...extra, macroShortcuts,
+});
+validateBindings(defaultShortcuts);
+validateBindings([{ macro: "custom\\User tool.swp", shortcut: "Ctrl+Alt+U" }]);
+for (const macro of ["../out.swp", "C:\\out.swp", "\\server\\out.swp", "a\\..\\out.swp", "a\\bad:s.swp", "bad.dll", "a \\out.swp"]) {
+  assert.throws(() => validateBindings([{ macro, shortcut: "Alt+D" }]), /SWP macro/);
+}
+assert.throws(() => validateBindings([{ macro: "DXF_v16.swp", shortcut: "D" }]), /Invalid shortcut/);
+assert.throws(() => validateBindings([{ macro: "DXF_v16.swp", shortcut: "Ctrl+Space" }]), /assigned more than once/);
+assert.throws(() => validateBindings([
+  { macro: "A.swp", shortcut: "Shift+Alt+D" }, { macro: "B.swp", shortcut: "Alt+Shift+D" },
+]), /assigned more than once/);
+assert.throws(() => validateBindings(Array(33).fill({ macro: "A.swp", shortcut: "Alt+A" })), /at most 32/);
+const importedBindings = settingsPayloadFromDocument({ format: "excelsis-helper-settings", settings: {
+  hotkeys: { macroShortcuts: [{ macro: "BOM_v19.swp", shortcut: "Alt+B" }] },
+} });
+assert.equal(mergeSettingsLayers(migratedRadius, importedBindings).hotkeys.macroShortcuts.length, 1, "Imported array replaces old bindings");
 
 const burstContext = {};
 vm.createContext(burstContext);
@@ -140,6 +174,7 @@ vm.runInContext(`${sourceBetween(
   "const SETTINGS_EXPORT_FORMAT",
 )}\nthis.validateSettingsPaths = validateAutomationSettingsPaths;`, pathValidationContext);
 const validPathSettings = {
+  hotkeys: { macroShortcuts: defaultShortcuts },
   erp: {
     worklogInbox: "C:\\Data\\ERP\\inbox",
     worklogWorktypes: "C:\\Data\\ERP\\worktypes.json",
@@ -226,7 +261,10 @@ for (const [baseName, settingNames] of macroCases) {
   }
   if (baseName.startsWith("DXF_v16")) {
     assert.match(macroSource, /candidate reject=toolbox route=part-export/);
-    assert.match(macroSource, /candidate reject=toolbox route=full-assembly/);
+    assert.match(macroSource, /ProcessAssemblyCandidateSnapshot swModel, dxfFolder, False/);
+    assert.match(macroSource, /Optional mode As Integer = MODE_REGULAR/);
+    assert.match(macroSource, /exportFolder = CandidateExportFolder\(dxfFolder, swModel, swComp\)/);
+    assert.match(macroSource, /exported = ExportOnePart\(swPart, partPath, cfg, qty, exportFolder, mode, Nothing\)/);
     assert.match(macroSource, /okHigh = body\.GetExtremePoint\(planeN\(0\), planeN\(1\), planeN\(2\), highX, highY, highZ\)/);
     assert.match(macroSource, /okLow = body\.GetExtremePoint\(-planeN\(0\), -planeN\(1\), -planeN\(2\), lowX, lowY, lowZ\)/);
     assert.doesNotMatch(macroSource, /GetThicknessViaVertexProjection|ProjectVertexOntoPlane/);

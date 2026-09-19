@@ -11,7 +11,7 @@
 param(
   [string]$PasteHotkey = "Ctrl+Space",
   [string]$CopyPathHotkey = "F7,F7",
-  [string]$AutoRadiusHotkey = "Alt+R",
+  [string]$MacroShortcutsBase64 = "",
   [string]$Prefix = "PRJ-",
   [string]$Template = "PRJ-[currentdate]",
   [string]$DateFormat = "yyyy.MM.dd",
@@ -20,6 +20,25 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$macroShortcuts = @(
+  [pscustomobject]@{ id = 'radius'; shortcut = 'Alt+R' },
+  [pscustomobject]@{ id = 'dxf'; shortcut = 'Alt+D' }
+)
+if ($MacroShortcutsBase64) {
+  if ($MacroShortcutsBase64.Length -gt 16384) { throw 'Macro shortcut configuration is too large.' }
+  $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($MacroShortcutsBase64)) | ConvertFrom-Json
+  $macroShortcuts = @()
+  if ($null -ne $decoded) { $macroShortcuts = @($decoded) }
+}
+if ($macroShortcuts.Count -gt 32) { throw 'Too many macro shortcuts.' }
+foreach ($binding in $macroShortcuts) {
+  if ($binding.id -notmatch '^[a-z0-9-]{1,32}$' -or $binding.shortcut.Length -gt 100) {
+    throw 'Invalid macro shortcut configuration.'
+  }
+}
+[string[]]$macroIds = @($macroShortcuts | ForEach-Object { $_.id })
+[string[]]$macroKeys = @($macroShortcuts | ForEach-Object { $_.shortcut })
 
 Add-Type -ReferencedAssemblies "System.Windows.Forms" -TypeDefinition @"
 using System;
@@ -81,12 +100,11 @@ public static class ExcelsisHotkeyHelper {
   private static IntPtr HookId = IntPtr.Zero;
   private static Hotkey PasteHotkey;
   private static Hotkey CopyPathHotkey;
-  private static Hotkey AutoRadiusHotkey;
+  private static MacroBinding[] MacroShortcuts = new MacroBinding[0];
   private static bool PasteRegisteredHotkey = false;
   // Register the copy-path hotkey through WM_HOTKEY. The low-level hook below
   // only handles double-taps when this registration is unavailable.
   private static bool CopyRegisteredHotkey = false;
-  private static bool AutoRadiusRegisteredHotkey = false;
   private static IntPtr ForegroundHook = IntPtr.Zero;
   private static HotkeyWindow Window;
   private static string Prefix = "PRJ-";
@@ -101,6 +119,12 @@ public static class ExcelsisHotkeyHelper {
     public int[] Required;
     public bool DoubleTap;
     public bool Valid;
+  }
+
+  private sealed class MacroBinding {
+    public Hotkey Hotkey;
+    public int RegistrationId;
+    public bool Registered;
   }
 
   private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -141,14 +165,16 @@ public static class ExcelsisHotkeyHelper {
         }
         return;
       }
-      if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == 3) {
-        if (!ForegroundProcessIsSolidWorks()) {
-          UpdateAutoRadiusRegistration();
+      if (m.Msg == WM_HOTKEY) {
+        int macroIndex = m.WParam.ToInt32() - 100;
+        if (macroIndex >= 0 && macroIndex < MacroShortcuts.Length) {
+          if (!ForegroundProcessIsSolidWorks()) {
+            UpdateMacroRegistrations();
+            return;
+          }
+          EmitMacroEvent(MacroShortcuts[macroIndex]);
           return;
         }
-        Log("WM_HOTKEY auto radius matched");
-        EmitAutoRadiusEvent();
-        return;
       }
       base.WndProc(ref m);
     }
@@ -239,32 +265,32 @@ public static class ExcelsisHotkeyHelper {
   [DllImport("user32.dll")]
   private static extern bool UnhookWinEvent(IntPtr eventHook);
 
-  public static string SelfTest(string pasteHotkey, string copyPathHotkey, string autoRadiusHotkey,
+  public static string SelfTest(string pasteHotkey, string copyPathHotkey, string[] macroIds, string[] macroKeys,
     string prefix, string template, string dateFormat, string logPath) {
     LogPath = logPath == null ? "" : logPath.Trim();
     var paste = ParseHotkey(pasteHotkey, "Ctrl+Space", "paste");
     var copy = ParseHotkey(copyPathHotkey, "F7,F7", "copy");
-    var autoRadius = ParseHotkey(autoRadiusHotkey, "Alt+R", "auto-radius");
+    ConfigureMacroShortcuts(macroIds, macroKeys);
     Prefix = String.IsNullOrWhiteSpace(prefix) ? "PRJ-" : prefix;
     Template = String.IsNullOrWhiteSpace(template) ? Prefix + "[currentdate]" : template;
     DateFormat = String.IsNullOrWhiteSpace(dateFormat) ? "yyyy.MM.dd" : dateFormat;
     string result = "paste=" + Describe(paste) + "; copy=" + Describe(copy)
-      + "; autoRadius=" + Describe(autoRadius) + "; sample=" + RenderProjectText();
+      + "; macros=" + DescribeMacroShortcuts() + "; sample=" + RenderProjectText();
     Log("self-test " + result);
     return result;
   }
 
-  public static void Run(string pasteHotkey, string copyPathHotkey, string autoRadiusHotkey,
+  public static void Run(string pasteHotkey, string copyPathHotkey, string[] macroIds, string[] macroKeys,
     string prefix, string template, string dateFormat, string logPath) {
     LogPath = logPath == null ? "" : logPath.Trim();
     PasteHotkey = ParseHotkey(pasteHotkey, "Ctrl+Space", "paste");
     CopyPathHotkey = ParseHotkey(copyPathHotkey, "F7,F7", "copy");
-    AutoRadiusHotkey = ParseHotkey(autoRadiusHotkey, "Alt+R", "auto-radius");
+    ConfigureMacroShortcuts(macroIds, macroKeys);
     Prefix = String.IsNullOrWhiteSpace(prefix) ? "PRJ-" : prefix;
     Template = String.IsNullOrWhiteSpace(template) ? Prefix + "[currentdate]" : template;
     DateFormat = String.IsNullOrWhiteSpace(dateFormat) ? "yyyy.MM.dd" : dateFormat;
     Log("starting paste=" + Describe(PasteHotkey) + " copy=" + Describe(CopyPathHotkey)
-      + " autoRadius=" + Describe(AutoRadiusHotkey) + " template=" + Template + " dateFormat=" + DateFormat);
+      + " macros=" + DescribeMacroShortcuts() + " template=" + Template + " dateFormat=" + DateFormat);
     Window = new HotkeyWindow();
     Window.CreateControl();
     Window.Show();
@@ -276,7 +302,7 @@ public static class ExcelsisHotkeyHelper {
     ForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero,
       ForegroundProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     Log("foreground hook=" + ForegroundHook + " lastError=" + Marshal.GetLastWin32Error());
-    UpdateAutoRadiusRegistration();
+    UpdateMacroRegistrations();
     HookId = SetHook(Proc);
     Log("keyboard hook=" + HookId + " lastError=" + Marshal.GetLastWin32Error());
     Application.Run(new ApplicationContext(Window));
@@ -285,7 +311,30 @@ public static class ExcelsisHotkeyHelper {
     if (ForegroundHook != IntPtr.Zero) UnhookWinEvent(ForegroundHook);
     if (PasteRegisteredHotkey && Window != null) UnregisterHotKey(Window.Handle, 1);
     if (Window != null) UnregisterHotKey(Window.Handle, 2);
-    if (AutoRadiusRegisteredHotkey && Window != null) UnregisterHotKey(Window.Handle, 3);
+    foreach (var binding in MacroShortcuts) {
+      if (binding.Registered && Window != null) UnregisterHotKey(Window.Handle, binding.RegistrationId);
+    }
+  }
+
+  private static void ConfigureMacroShortcuts(string[] ids, string[] keys) {
+    if (ids == null || keys == null || ids.Length != keys.Length || ids.Length > 32)
+      throw new ArgumentException("Invalid macro shortcut list.");
+    var bindings = new List<MacroBinding>();
+    var used = new HashSet<string>();
+    for (int i = 0; i < ids.Length; i++) {
+      Hotkey hotkey = TryParseHotkey(keys[i], ids[i]);
+      uint modifiers;
+      if (!TryGetMacroModifiers(hotkey, out modifiers)) throw new ArgumentException("Invalid macro shortcut: " + keys[i]);
+      if (!used.Add(modifiers + ":" + hotkey.Trigger)) throw new ArgumentException("Duplicate macro shortcut: " + keys[i]);
+      bindings.Add(new MacroBinding { Hotkey = hotkey, RegistrationId = 100 + i });
+    }
+    MacroShortcuts = bindings.ToArray();
+  }
+
+  private static string DescribeMacroShortcuts() {
+    var descriptions = new List<string>();
+    foreach (var binding in MacroShortcuts) descriptions.Add(binding.Hotkey.Id + "=" + Describe(binding.Hotkey));
+    return String.Join(",", descriptions.ToArray());
   }
 
   private static string Describe(Hotkey hotkey) {
@@ -405,14 +454,14 @@ public static class ExcelsisHotkeyHelper {
               }
               return (IntPtr)1;
             }
-            if (!AutoRadiusRegisteredHotkey && !wasDown && Matches(AutoRadiusHotkey, vk)
-                && ForegroundProcessIsSolidWorks()) {
-              if (!Fired.Contains(AutoRadiusHotkey.Id)) {
-                Fired.Add(AutoRadiusHotkey.Id);
-                Log("hook auto radius matched");
-                EmitAutoRadiusEvent();
+            if (!wasDown) {
+              foreach (var binding in MacroShortcuts) {
+                if (!binding.Registered && MatchesMacroHotkey(binding.Hotkey, vk)
+                    && ForegroundProcessIsSolidWorks()) {
+                  if (Fired.Add(binding.Hotkey.Id)) EmitMacroEvent(binding);
+                  return (IntPtr)1;
+                }
               }
-              return (IntPtr)1;
             }
             // Fallback only (see CopyRegisteredHotkey); WM_HOTKEY is the
             // primary mechanism for the copy hotkey.
@@ -452,9 +501,8 @@ public static class ExcelsisHotkeyHelper {
               Fired.Remove(CopyPathHotkey.Id);
               suppress = true;
             }
-            if (AutoRadiusHotkey != null && AutoRadiusHotkey.Trigger == vk && Fired.Contains(AutoRadiusHotkey.Id)) {
-              Fired.Remove(AutoRadiusHotkey.Id);
-              suppress = true;
+            foreach (var binding in MacroShortcuts) {
+              if (binding.Hotkey.Trigger == vk && Fired.Remove(binding.Hotkey.Id)) suppress = true;
             }
             if (suppress) return (IntPtr)1;
           }
@@ -515,9 +563,9 @@ public static class ExcelsisHotkeyHelper {
     return RegisterHotKey(Window.Handle, 2, modifiers | MOD_NOREPEAT, (uint)hotkey.Trigger);
   }
 
-  private static bool TryRegisterAutoRadiusHotkey(Hotkey hotkey) {
-    if (hotkey == null || !hotkey.Valid || hotkey.DoubleTap || Window == null) return false;
-    uint modifiers = 0;
+  private static bool TryGetMacroModifiers(Hotkey hotkey, out uint modifiers) {
+    modifiers = 0;
+    if (hotkey == null || !hotkey.Valid || hotkey.DoubleTap) return false;
     for (int i = 0; i < hotkey.Required.Length; i++) {
       int key = hotkey.Required[i];
       if (key == VK_CONTROL) modifiers |= MOD_CONTROL;
@@ -526,8 +574,18 @@ public static class ExcelsisHotkeyHelper {
       else if (key == VK_LWIN) modifiers |= MOD_WIN;
       else return false;
     }
-    if (modifiers == 0) return false;
-    return RegisterHotKey(Window.Handle, 3, modifiers | MOD_NOREPEAT, (uint)hotkey.Trigger);
+    return modifiers != 0;
+  }
+
+  private static bool MatchesMacroHotkey(Hotkey hotkey, int vk) {
+    uint required;
+    if (hotkey == null || hotkey.Trigger != vk || !TryGetMacroModifiers(hotkey, out required)) return false;
+    uint down = 0;
+    if (IsKeyDown(VK_CONTROL)) down |= MOD_CONTROL;
+    if (IsKeyDown(VK_MENU)) down |= MOD_ALT;
+    if (IsKeyDown(VK_SHIFT)) down |= MOD_SHIFT;
+    if (IsKeyDown(VK_LWIN) || IsKeyDown(VK_RWIN)) down |= MOD_WIN;
+    return down == required;
   }
 
   private static void ForegroundChanged(IntPtr eventHook, uint eventType, IntPtr hwnd,
@@ -535,27 +593,29 @@ public static class ExcelsisHotkeyHelper {
     HotkeyWindow window = Window;
     if (window == null || window.IsDisposed || !window.IsHandleCreated) return;
     try {
-      window.BeginInvoke(new MethodInvoker(UpdateAutoRadiusRegistration));
+      window.BeginInvoke(new MethodInvoker(UpdateMacroRegistrations));
     } catch {}
   }
 
-  private static void UpdateAutoRadiusRegistration() {
-    if (Window == null || Window.IsDisposed || AutoRadiusHotkey == null) return;
-    bool shouldRegister = ForegroundProcessIsSolidWorks()
-      && AutoRadiusHotkey.Valid && !AutoRadiusHotkey.DoubleTap;
-    if (shouldRegister && !AutoRadiusRegisteredHotkey) {
-      AutoRadiusRegisteredHotkey = TryRegisterAutoRadiusHotkey(AutoRadiusHotkey);
-      Log("register auto radius hotkey=" + AutoRadiusRegisteredHotkey
-        + " lastError=" + Marshal.GetLastWin32Error());
-    } else if (!shouldRegister && AutoRadiusRegisteredHotkey) {
-      UnregisterHotKey(Window.Handle, 3);
-      AutoRadiusRegisteredHotkey = false;
-      Log("unregister auto radius hotkey");
+  private static void UpdateMacroRegistrations() {
+    if (Window == null || Window.IsDisposed) return;
+    bool shouldRegister = ForegroundProcessIsSolidWorks();
+    foreach (var binding in MacroShortcuts) {
+      if (shouldRegister && !binding.Registered) {
+        uint modifiers;
+        if (TryGetMacroModifiers(binding.Hotkey, out modifiers))
+          binding.Registered = RegisterHotKey(Window.Handle, binding.RegistrationId, modifiers | MOD_NOREPEAT, (uint)binding.Hotkey.Trigger);
+        Log("register macro " + binding.Hotkey.Id + "=" + binding.Registered + " lastError=" + Marshal.GetLastWin32Error());
+      } else if (!shouldRegister && binding.Registered) {
+        UnregisterHotKey(Window.Handle, binding.RegistrationId);
+        binding.Registered = false;
+      }
     }
   }
 
-  private static void EmitAutoRadiusEvent() {
-    Console.Out.WriteLine("EXCELSIS_HOTKEY_EVENT:auto-radius");
+  private static void EmitMacroEvent(MacroBinding binding) {
+    Log("macro shortcut matched: " + binding.Hotkey.Id);
+    Console.Out.WriteLine("EXCELSIS_HOTKEY_EVENT:macro:" + binding.Hotkey.Id);
     Console.Out.Flush();
   }
 
@@ -797,8 +857,8 @@ public static class ExcelsisHotkeyHelper {
 "@
 
 if ($SelfTest) {
-  [ExcelsisHotkeyHelper]::SelfTest($PasteHotkey, $CopyPathHotkey, $AutoRadiusHotkey, $Prefix, $Template, $DateFormat, $LogPath)
+  [ExcelsisHotkeyHelper]::SelfTest($PasteHotkey, $CopyPathHotkey, $macroIds, $macroKeys, $Prefix, $Template, $DateFormat, $LogPath)
   exit 0
 }
 
-[ExcelsisHotkeyHelper]::Run($PasteHotkey, $CopyPathHotkey, $AutoRadiusHotkey, $Prefix, $Template, $DateFormat, $LogPath)
+[ExcelsisHotkeyHelper]::Run($PasteHotkey, $CopyPathHotkey, $macroIds, $macroKeys, $Prefix, $Template, $DateFormat, $LogPath)

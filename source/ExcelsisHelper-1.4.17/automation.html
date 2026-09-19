@@ -54,7 +54,7 @@
         <section id="macroView" class="view">
           <div class="section-heading">
             <h1>Macro Runner</h1>
-            <span id="autoRadiusShortcutNote" class="macro-shortcut-note muted">AutoRadius: Alt+R</span>
+            <div id="macroShortcutNotes" class="macro-shortcut-note muted"></div>
             <div class="image-row inline-actions">
               <button id="openMacroFolderBtn">Open Macro Folder</button>
               <button id="refreshMacroTilesBtn">Refresh</button>
@@ -402,10 +402,13 @@
                 <span>Copy Explorer selection path</span>
                 <input id="settingsCopyPathHotkey" placeholder="F7,F7" spellcheck="false">
               </label>
-              <label>
-                <span>AutoRadius shortcut (SOLIDWORKS only)</span>
-                <input id="settingsAutoRadiusHotkey" placeholder="Alt+R" spellcheck="false">
-              </label>
+              <div class="full macro-shortcut-settings">
+                <div class="section-heading">
+                  <span>Macro shortcuts (SOLIDWORKS only)</span>
+                  <button id="addMacroShortcutBtn" type="button" class="macro-shortcut-icon" title="Add macro shortcut" aria-label="Add macro shortcut">+</button>
+                </div>
+                <div id="settingsMacroShortcuts" class="macro-shortcut-rows"></div>
+              </div>
               <label class="full">
                 <span>Pasted text template</span>
                 <input id="settingsProjectDateTemplate" placeholder="PRJ-[currentdate]" spellcheck="false">

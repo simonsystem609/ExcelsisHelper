@@ -1362,9 +1362,49 @@ h2 {
 }
 
 .macro-shortcut-note {
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
   min-width: 0;
   font-size: 12px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.macro-shortcut-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.macro-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 160px) 32px;
+  align-items: end;
+  gap: 8px;
+}
+
+.macro-shortcut-row label,
+.macro-shortcut-row select,
+.macro-shortcut-row input {
+  min-width: 0;
+  width: 100%;
+}
+
+.macro-shortcut-icon {
+  width: 32px;
+  height: 34px;
+  padding: 0;
+  flex: 0 0 32px;
+  font-size: 18px;
+}
+
+@media (max-width: 560px) {
+  .macro-shortcut-row {
+    grid-template-columns: minmax(0, 1fr) 32px;
+  }
+  .macro-shortcut-row > label:first-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .inline-actions button {

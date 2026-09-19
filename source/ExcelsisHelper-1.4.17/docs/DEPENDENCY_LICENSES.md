@@ -1,6 +1,6 @@
 # Locked Dependency License Inventory
 
-Generated deterministically from package-lock.json for Excelsis Helper 1.4.16.
+Generated deterministically from package-lock.json for Excelsis Helper 1.4.17.
 The lockfile contains 193 package entries; all are build dependencies because the app has no npm runtime dependencies.
 This table records every locked package's exact version, declared SPDX expression, role, and source archive. Not every installed package directory contains a standalone license file; complete applicable notices for redistributed runtime components are preserved separately in THIRD_PARTY_NOTICES.md and licenses/.
 
