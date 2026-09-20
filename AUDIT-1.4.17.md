@@ -20,7 +20,7 @@ reapplied. Installer identity, user-data identity, preset-free behavior and
 the explicit 16-runtime-script allow-list are preserved.
 
 The exact expanded source is
-[source/ExcelsisHelper-1.4.17/](source/ExcelsisHelper-1.4.17/): **131 files,
+[source/ExcelsisHelper-1.4.17/](https://github.com/simonsystem609/ExcelsisHelper/tree/3fd90f4b9cb9f8a5df4efba2a8bd096941b0ada7/source/ExcelsisHelper-1.4.17/): **131 files,
 4,305,158 bytes**, byte-identical to the source ZIP contents and the frozen
 build inputs. It includes source, build configuration, lockfile, tests, notices,
 nine compiled SWPs and their readable SWBs. Build dependencies and generated
@@ -32,10 +32,10 @@ extraction remains independently authored; this does not introduce model,
 geometry or proprietary decoder functionality. No vendor SDK, vendor sample,
 customer document, real-world preset or settings sidecar is included.
 
-See [PROVENANCE.md](source/ExcelsisHelper-1.4.17/docs/PROVENANCE.md),
-[THIRD_PARTY_NOTICES.md](source/ExcelsisHelper-1.4.17/THIRD_PARTY_NOTICES.md),
-[DEPENDENCY_LICENSES.md](source/ExcelsisHelper-1.4.17/docs/DEPENDENCY_LICENSES.md)
-and [BUILDING.md](source/ExcelsisHelper-1.4.17/docs/BUILDING.md).
+See [PROVENANCE.md](https://github.com/simonsystem609/ExcelsisHelper/blob/3fd90f4b9cb9f8a5df4efba2a8bd096941b0ada7/source/ExcelsisHelper-1.4.17/docs/PROVENANCE.md),
+[THIRD_PARTY_NOTICES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/3fd90f4b9cb9f8a5df4efba2a8bd096941b0ada7/source/ExcelsisHelper-1.4.17/THIRD_PARTY_NOTICES.md),
+[DEPENDENCY_LICENSES.md](https://github.com/simonsystem609/ExcelsisHelper/blob/3fd90f4b9cb9f8a5df4efba2a8bd096941b0ada7/source/ExcelsisHelper-1.4.17/docs/DEPENDENCY_LICENSES.md)
+and [BUILDING.md](https://github.com/simonsystem609/ExcelsisHelper/blob/3fd90f4b9cb9f8a5df4efba2a8bd096941b0ada7/source/ExcelsisHelper-1.4.17/docs/BUILDING.md).
 
 ## Independent build and regression checks
 

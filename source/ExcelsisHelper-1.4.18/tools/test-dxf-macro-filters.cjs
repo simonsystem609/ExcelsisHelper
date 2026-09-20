@@ -20,7 +20,7 @@ function toDotNet(source) {
     .replace(/\bSet\s+(?=[A-Za-z])/g, "")
     .replace(/\bVariant\b/g, "Object")
     .replace(/\bEmpty\b/g, "Nothing")
-    .replace(/\b(LCase|Trim|Replace|Mid|Left|Right|Chr)\$/g, "$1")
+    .replace(/\b(LCase|Trim|Replace|Mid|Left|Right|Chr|Format)\$/g, "$1")
     .replace(/\b(\d+(?:\.\d+)?)#/g, "$1R")
     .replace(/\bDebug\.Print\b/g, "TraceRun")
     .replace(/\bArray\(((?:[^()\r\n]|\([^()\r\n]*\))*)\)/g, "New Object() {$1}")
@@ -43,7 +43,9 @@ const functions = [
   "FindLargestPlanarFace", "FindLargestPlanarFaceInBodies", "IsPlanarFace", "TryGetPlaneNormalAndPoint", "SignedPlaneDistance",
   "GetThicknessViaBodyExtents", "GetBodiesThicknessViaExtents", "GetThinSolidThickness", "IsThinPlateLike", "HasSheetLikePlanarFaces",
   "GetBodyAxisSpan", "GetFaceFootprintAxis", "GetBodiesPlateDimensions", "GetPartFilterDimensions",
-  "ComponentBodiesMayBeSheetLike", "BodiesMayBeSheetLike",
+  "BodiesContainOutOfSlabSolid", "BodyThicknessSlabStatus", "ComponentContainsOutOfSlabSolid",
+  "FormatThickness",
+  "ComponentBodiesMayBeSheetLike", "ReferencedComponentBodiesMayBeSheetLike", "BodiesMayBeSheetLike",
   "DxfOwnerIdentity", "DxfCandidateScopeKey", "NormalizeVisiblePartScopes", "DxfPartNameKey", "DxfIdentityTag", "CleanFileName",
   "IsWasherLikeThinSolid", "CountPartSolidBodies", "GetExportPieceCount", "IsToolboxPartSafe",
   "IsImportedPartPath", "IsImportedGeometryPart", "ShouldRejectImportedCandidate",
@@ -73,9 +75,13 @@ for (const filename of ["DXF_v16.swb", "DXF_v16_ROfriendy.swb"]) {
     assert.match(body, /GetExportPieceCount\(swPart, qty\)/);
   }
   const regular = procedure(source, "ExportOnePart");
+  assert.match(regular, /If Not isSM Then\s+If BodiesContainOutOfSlabSolid\(GetPartBodies\(swPart\)\)/);
+  assert.ok(regular.indexOf("BodiesContainOutOfSlabSolid") < regular.indexOf("Dim isThin"), "face/precut exceptions cannot bypass the slab check");
   assert.match(regular, /Not exportSelectedFace And Not isSM And Not isThin/);
   assert.match(regular, /ExportNormalViewToDxf\(swPart, selectedFace, outPath\)/);
   const context = procedure(source, "ExportOnePartInAssemblyContext");
+  assert.ok(context.indexOf("If isSM Then") < context.indexOf("ComponentContainsOutOfSlabSolid"));
+  assert.ok(context.indexOf("ComponentContainsOutOfSlabSolid") < context.indexOf("If selectedPlanarFaceOverride Then"));
   assert.match(context, /If isSM Then[\s\S]*ExportOnePart\([\s\S]*GoTo RestorePartConfiguration/);
   assert.match(context, /If selectedPlanarFaceOverride Then[\s\S]*ElseIf Not IsThinPlateLike/);
   assert.match(procedure(source, "ExportAssemblyComponentViaTemporaryPart"), /CreateFeatureFromBody3/);
@@ -111,7 +117,7 @@ for (const filename of ["DXF_v16.swb", "DXF_v16_ROfriendy.swb"]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "excelsis-dxf-filter-tests-"));
   const input = path.join(dir, "predicates.vb");
   const output = path.join(dir, "predicates.exe");
-  const constants = source.split(/\r?\n/).filter((line) => /^Const (?:swComponent|THICKNESS_LIMIT|THIN_PLATE_MIN_RATIO|MIN_PLANAR_AREA_RATIO|MIN_LARGEST_PLANAR_FOOTPRINT_RATIO|WASHERLIKE_)/.test(line));
+  const constants = source.split(/\r?\n/).filter((line) => /^Const (?:swComponent|swNormalBody_e|THICKNESS_LIMIT|THIN_PLATE_MIN_RATIO|MIN_PLANAR_AREA_RATIO|MIN_LARGEST_PLANAR_FOOTPRINT_RATIO|WASHERLIKE_)/.test(line));
   fs.writeFileSync(input, `Option Strict Off
 Imports System
 Imports Microsoft.VisualBasic
@@ -243,7 +249,39 @@ Function MakePart(t As Double, w As Double, length As Double) As TestPart
   part.Bodies = New Object() {New TestBody(t) With {.Width = w / 1000, .Length = length / 1000}}
   Return part
 End Function
+Function SlabFace(area As Double, nz As Double, z As Double) As TestFace
+  Dim face As New TestFace(area, True)
+  face.Surface.PlaneParams = New Double() {0, 0, nz, 0, 0, z}
+  Return face
+End Function
 Sub Main()
+  Check(FormatThickness(0.3) = "0.3" And FormatThickness(0.75) = "0.75", "fractional sheet thickness must not become LV0 or LV1")
+  Check(FormatThickness(12.4) = "12" And FormatThickness(12.5) = "13" And FormatThickness(0) = "0", "existing whole-mm half-up naming preserved")
+  Dim slab As New TestBody(3), slabThickness As Double, protrusion As Double
+  Check(BodyThicknessSlabStatus(slab, slabThickness, protrusion) = 1 And Math.Abs(slabThickness - 3) < 0.00001, "flat plate is inside true face-pair thickness")
+  slab.HighOverhang = 10
+  Check(BodiesContainOutOfSlabSolid(New Object() {slab}), "bent flange outside upper thickness plane rejected")
+  slab.HighOverhang = 0 : slab.LowOverhang = 10
+  Check(BodiesContainOutOfSlabSolid(New Object() {slab}), "bent flange outside lower thickness plane rejected")
+  slab.Normal = New Double() {Math.Sqrt(0.5), 0, Math.Sqrt(0.5)}
+  Check(BodiesContainOutOfSlabSolid(New Object() {slab}), "rotated bent body rejected without world-box assumptions")
+  slab.LowOverhang = 0 : slab.Offset = 1.234
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab}), "rotated translated flat body accepted")
+  slab.HighOverhang = 0.015
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab}), "small geometric tolerance allowed")
+  slab.HighOverhang = 0.05
+  Check(BodiesContainOutOfSlabSolid(New Object() {slab}), "measurable out-of-band geometry rejected")
+  slab.IsSheetMetal = True
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab}), "true sheetmetal keeps flatten route")
+  slab.IsSheetMetal = False : slab.FailExtents = True
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab}), "unreadable extents cannot invent a bent classification")
+  slab = New TestBody(3) With {.ExplicitPlanes = True}
+  slab.Faces = New Object() {SlabFace(0.02, 1, 0.003), SlabFace(0.011, -1, 0), SlabFace(0.009, -1, 0), SlabFace(0.0001, 1, 0.002), New TestFace(0.001, False)}
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab}), "split opposing faces, pocket floor, holes and radii within thickness accepted")
+  Dim offsetSlab As New TestBody(3) With {.Offset = 0.1}
+  Check(Not BodiesContainOutOfSlabSolid(New Object() {slab, offsetSlab}), "disjoint flat bodies evaluated separately, not across empty space")
+  offsetSlab.HighOverhang = 5
+  Check(BodiesContainOutOfSlabSolid(New Object() {slab, offsetSlab}), "one bent body rejects a mixed non-sheetmetal part")
   Dim shown As New TestComponent
   Dim hidden As New TestComponent With {.VisibleValue = 0}
   Dim parent As New TestComponent With {.VisibleValue = 0, .FilePath = "C:\\Parts\\sub.SLDASM"}
@@ -291,6 +329,17 @@ Sub Main()
   Check(IsThinPlateLike(rotated), "rotated plate eligibility")
   tilted.Box = New Double() {0, 0, 0, 0.09, 0.15, 0.2}
   Check(ComponentBodiesMayBeSheetLike(rotated), "rotated plate passes early assembly filter")
+  Dim reference As New TestComponent With {.Bodies = rotated.Bodies, .BodyInfo = New Object() {1}}
+  Check(ReferencedComponentBodiesMayBeSheetLike(reference, reference.FilePath, "Default"), "reference preflight keeps rotated thin plate with large world extents")
+  For Each thickness As Double In New Double() {20.1, 20.1001, 80, 100}
+    Dim profile = MakePart(thickness, 200, 850)
+    reference.Bodies = profile.Bodies
+    Check(ReferencedComponentBodiesMayBeSheetLike(reference, reference.FilePath, "Default") = (thickness <= 20.1), "reference preflight reuses exact thickness boundary")
+  Next
+  reference.Bodies(0).IsSheetMetal = True
+  Check(ReferencedComponentBodiesMayBeSheetLike(reference, reference.FilePath, "Default"), "native bent sheet metal survives large extents")
+  reference.Bodies(0).IsSheetMetal = False : reference.BodyInfo = New Object() {0}
+  Check(ReferencedComponentBodiesMayBeSheetLike(reference, reference.FilePath, "Default"), "assembly user body cannot reject regular source part")
   Dim screw = MakePart(16, 16, 30)
   screw.Bodies = New Object() {New TestBody(30)}
   Check(GetThinSolidThickness(screw) = 30, "circular edges require no vertices")
@@ -512,6 +561,11 @@ Class TestComponent
   Public ReferencedConfiguration As String = "Default"
   Public ImportedPath As String = ""
   Public Name2 As String = "test instance"
+  Public Bodies As Object(), BodyInfo As Object
+  Function GetBodies3(kind As Integer, ByRef info As Object) As Object
+    info = BodyInfo
+    Return Bodies
+  End Function
   ReadOnly Property Visible As Integer
     Get
       If FailVisible Then Throw New Exception("simulated COM failure")
@@ -634,6 +688,8 @@ Class TestBody
   Public Width As Double = 0.1
   Public Length As Double = 0.2
   Public Offset As Double
+  Public HighOverhang As Double, LowOverhang As Double
+  Public ExplicitPlanes As Boolean
   Public Normal As Double() = New Double() {0, 0, 1}
   Public FailExtents As Boolean
   Public IsSheetMetal As Boolean
@@ -643,9 +699,13 @@ Class TestBody
     Faces = New Object() {New TestFace(0.02, True), New TestFace(0.02, True), New TestFace(0.0018, False)}
   End Sub
   Function GetFaces() As Object
-    For Each face As TestFace In Faces
-      face.Surface.PlaneParams = New Double() {Normal(0), Normal(1), Normal(2), 0, 0, 0}
-    Next
+    If Not ExplicitPlanes Then
+      For i As Integer = 0 To Faces.Length - 1
+        Dim face As TestFace = Faces(i), pos = If(i = 0, Offset + Thickness, Offset)
+        face.Surface.PlaneParams = New Double() {Normal(0), Normal(1), Normal(2), Normal(0) * pos, Normal(1) * pos, Normal(2) * pos}
+        face.FaceInSurfaceSense = (i = 1)
+      Next
+    End If
     Return Faces
   End Function
   Function GetBodyBox() As Object
@@ -653,8 +713,8 @@ Class TestBody
   End Function
   Function GetExtremePoint(nx As Double, ny As Double, nz As Double, ByRef x As Double, ByRef y As Double, ByRef z As Double) As Boolean
     If FailExtents Then Return False
-    Dim distance = Offset
-    If nx * Normal(0) + ny * Normal(1) + nz * Normal(2) > 0 Then distance += Thickness
+    Dim distance = Offset - LowOverhang / 1000
+    If nx * Normal(0) + ny * Normal(1) + nz * Normal(2) > 0 Then distance = Offset + Thickness + HighOverhang / 1000
     Dim ux = Normal(2), uy = 0.0, uz = -Normal(0)
     Dim vx = 0.0, vy = 1.0, vz = 0.0
     Dim du = If(nx * ux + ny * uy + nz * uz > 0, Length, 0.0)

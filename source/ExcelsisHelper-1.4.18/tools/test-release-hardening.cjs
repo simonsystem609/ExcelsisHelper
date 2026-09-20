@@ -497,7 +497,7 @@ assert.match(main, /minForcedRestartGapMs:\s*60 \* 1000/);
 assert.match(main, /now - helper\.startedAt < minForcedRestartGapMs/);
 assert.match(rendererHarnessServer, /publicMessage = status === 404 \? "Not Found" : "Internal Server Error"/);
 assert.doesNotMatch(rendererHarnessServer, /response\.end\(String\(error/);
-assert.match(pkg.version, /^1\.4\.17$/);
+assert.match(pkg.version, /^1\.4\.18$/);
 assert.equal(pkg.name, "excelsis-helper");
 assert.equal(lock.name, pkg.name);
 assert.equal(lock.version, pkg.version);

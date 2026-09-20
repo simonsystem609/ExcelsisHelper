@@ -1,10 +1,11 @@
-# Release Verification: 1.4.17
+# Release Verification: 1.4.18
 
 The independent public release record is
-[AUDIT-1.4.17.md](https://github.com/simonsystem609/ExcelsisHelper/blob/main/AUDIT-1.4.17.md).
+[AUDIT-1.4.18.md](https://github.com/simonsystem609/ExcelsisHelper/blob/main/AUDIT-1.4.18.md).
 It records the exact source and artifact hashes, licensing/provenance assessment,
 build/tests, dependency/secret/privacy/malware checks and packaged correspondence.
-Producer claims in CANDIDATE_1.4.17.md do not replace that independent review.
+CANDIDATE_1.4.17.md describes the preserved application baseline. Supplied
+macro-test claims do not replace independent review of the combined release.
 
 The release includes all nine readable SWBs and build-ready SWPs. Runtime
 resources use the exact 16-script allow-list and SWP-only macro deployment.
