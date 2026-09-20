@@ -18,10 +18,14 @@ const names = [
   "ExportSelectedSubassemblyParts", "ExportSelectedSubassembliesInContext", "ProcessSelectedSubassemblyContext",
   "CollectSelectedSubassemblyParts", "AddSelectedSubassemblyContext", "IsPartPath", "IsAssemblyPath",
   "OpenPartForExport", "CloseCandidateDocument", "CloseExplicitlyOpenedPartDocs", "TrackCandidateDocument", "PreserveCandidateDocument",
+  "CandidateIsPreserved", "GetModelWindowDocuments", "BuildVisibleDocumentWindowKeyDict", "CloseVisibleDocumentsOpenedByMacro",
+  "FindCandidateAssemblyReference",
   "RememberOriginalConfiguration", "RestoreOriginalConfigurations", "ActivateConfigurationChecked", "ShouldRejectImportedCandidate",
   "CloseTemporaryExportDocument", "VerifyTemporaryPartClosed",
   "AskDxfOutputOptions", "DxfOwnerIdentity", "DxfCandidateScopeKey", "NormalizeVisiblePartScopes",
   "DxfPartNameKey", "DxfIdentityTag", "CleanFileName", "CandidatePreflightAllows", "BodiesMayBeSheetLike",
+  "ReferencedComponentBodiesMayBeSheetLike", "GetComponentSuppressionStateSafe",
+  "IsComponentLightweightSafe", "ResolveSelectedPartIfLightweight",
   "DxfAssemblyFolderStem", "RegisterDxfNameOwner", "BuildDxfNameInventory", "CandidateExportFolder", "KeepExistingDxf", "ClaimDxfOutput",
 ];
 function adapt(source) {
@@ -36,7 +40,7 @@ function adapt(source) {
     .replace(/\.GetType\b/g, ".DocType")
     .replace(/^([ \t]*)(MsgBox|\w+\.ForceRebuild3) (.+)$/gm, "$1$2($3)")
     .replace(/^([ \t]*)RegisterDxfNameOwner (.+)$/gm, "$1RegisterDxfNameOwner($2)")
-    .replace(/\bThen (\w+\.(?:Add|Remove|CloseDoc)|Err\.Raise|TraceRun|ActivateConfigurationChecked|ActivateModelDocument) (.+)$/gm, "Then $1($2)")
+    .replace(/\bThen (\w+\.(?:Add|Remove|CloseDoc)|Err\.Raise|TraceRun|PreserveCandidateDocument|ActivateConfigurationChecked|ActivateModelDocument) (.+)$/gm, "Then $1($2)")
     .replace(/^([ \t]*)(\w+\.(?:Add|Remove|CloseDoc|QuitDoc)|Err\.Raise|TraceRun|DxfGetWindowThreadProcessId|PreserveCandidateDocument|TrackCandidateDocument|BeginDxfCandidate|FinishDxfCandidate|RememberOriginalConfiguration|RebuildDocumentIfNeeded|ResolveSelectedPartIfLightweight|ActivateModelDocument|ProcessFullAssemblyInContext|ProcessAssemblyCandidateSnapshot|ExportSelectedSubassemblyParts|CollectSelectedSubassemblyParts|AddSelectedSubassemblyContext|ExportSelectedSubassembliesInContext|ProcessSelectedSubassemblyContext) (.+)$/gm, "$1$2($3)")
     .replace(/^(Function|Sub) ([\s\S]*?)(?=\)\s*(?:As \w+)?\s*\r?\n)/gm, (declaration) =>
       declaration.replace(/([,(]\s*)(?!ByVal\b|ByRef\b|Optional\b)(\w+(?:\(\))? As \w+)/g, "$1ByRef $2"));
@@ -48,6 +52,12 @@ for (const file of ["DXF_v16.swb", "DXF_v16_ROfriendy.swb"]) {
   assert.equal((main.match(/AskDxfRunOptions\(/g) || []).length, 1);
   assert.doesNotMatch(source, /ExcelsisTaskDialog|AskFullAssemblyImportedFilter|ClosePartOpenedForCandidate/);
   assert.doesNotMatch(procedure(source, "RememberOriginalConfiguration"), /Array\(swModel/);
+  assert.doesNotMatch(source, /g_initiallyVisibleDocuments\.(?:Add|Remove|RemoveAll)\b/);
+  assert.match(procedure(source, "GetModelWindowDocuments"), /modelWindows = swFrame.ModelWindows/);
+  assert.doesNotMatch(procedure(source, "GetModelWindowDocuments"), /GetFirstDocument|GetDocuments|GetComponents/);
+  assert.match(procedure(source, "PreserveCandidateDocument"), /g_preservedDocuments\(key\) = reason/);
+  assert.doesNotMatch(procedure(source, "CloseCandidateDocument"), /\.Visible\s*=\s*False/);
+  assert.match(procedure(source, "CloseCandidateDocument"), /FindCandidateAssemblyReference\(partPath\)[\s\S]*swApp.CloseDoc closeName[\s\S]*model.SetSaveFlag/);
   for (const route of ["ProcessSelectedComponents", "ProcessAssemblyCandidateSnapshot", "ExportSelectedSubassemblyParts"]) {
     assert.match(procedure(source, route), /ExportAssemblyCandidate\(/);
     assert.match(procedure(source, route), /DxfStopRequested\(\)/);
@@ -60,6 +70,14 @@ for (const file of ["DXF_v16.swb", "DXF_v16_ROfriendy.swb"]) {
   assert.match(procedure(source, "main"), /If g_userCancelled Then\s+WriteDxfRunResult "CANCELLED"/);
   const runner = procedure(source, "ExportAssemblyCandidate");
   assert.ok(runner.indexOf("CandidatePreflightAllows(") < runner.indexOf("OpenPartForExport("));
+  const resolutionIndex = runner.indexOf("ResolveSelectedPartIfLightweight swComp");
+  const resolvedCheckIndex = runner.indexOf("CandidatePreflightAllows(", resolutionIndex);
+  assert.ok(resolvedCheckIndex > resolutionIndex && resolvedCheckIndex < runner.indexOf("OpenPartForExport("));
+  assert.doesNotMatch(runner, /ResolveAll|LightweightAll/);
+  assert.match(source, /Const swNormalBody_e As Long = 1\b/);
+  assert.match(source, /Const swComponentFullyResolved As Long = 2\b/);
+  const referencePreflight = procedure(source, "ReferencedComponentBodiesMayBeSheetLike");
+  assert.doesNotMatch(referencePreflight, /OpenDoc|Activate|ShowConfiguration|SetSuppression|ForceRebuild|DoEvents/i);
   assert.match(runner, /openedPath = CStr\(swPart.GetPathName\)/);
   for (const name of ["ExportOnePart", "ExportOnePartInAssemblyContext"]) {
     const exporter = procedure(source, name);
@@ -88,6 +106,7 @@ Dim g_generalImportedFilter As Boolean, g_userCancelled As Boolean
 Dim g_traceComponent As String, g_stopBatchReason As String, g_importHint As String
 Dim g_importUnknown As Boolean, g_importComponent As Object
 Dim g_initiallyVisibleDocuments As Object, g_candidateOwnership As Object, g_originalConfigurations As Object
+Dim g_preservedDocuments As Object, g_remainingNewWindows As Long
 Dim g_preflightToolbox As Object, g_preflightRejected As Object, g_partNameOwners As Object, g_folderNameOwners As Object, g_outputOwners As Object
 Dim g_candidateResults As Object, g_candidateKey As String = "", g_existingCount As Long
 Dim g_missingOnly As Boolean, g_assemblyFolders As Boolean, g_candidateExisting As Boolean, g_forceIdentityTags As Boolean
@@ -102,11 +121,14 @@ Public modeAnswer As MsgBoxResult, importAnswer As MsgBoxResult, methodAnswer As
 Public promptTitles As Collections.Generic.List(Of String)
 Public exportedFolders As Collections.Generic.List(Of String)
 Public groupAnswer As MsgBoxResult
+Public usePromptDefaults As Boolean
 Const swDocPART As Long = 1, swDocASSEMBLY As Long = 2
 Const MODE_REGULAR As Integer = 1, MODE_PRECUT As Integer = 2
 Const ASSEMBLY_EXPORT_REGULAR As Integer = 1, ASSEMBLY_EXPORT_CONTEXT As Integer = 2
 Const swOpenDocOptions_Silent As Long = 1, swOpenDocOptions_ReadOnly As Long = 2
 Const swSolidBody As Integer = 0, THICKNESS_LIMIT As Double = 20.1, THIN_PLATE_MIN_RATIO As Double = 2
+Const swNormalBody_e As Long = 1, swComponentFullyResolved As Long = 2, swComponentResolved As Long = 3
+Const swComponentLightweight As Long = 1, swComponentFullyLightweight As Long = 4
 Function Dict() As Object
   Return CreateObject("Scripting.Dictionary")
 End Function
@@ -130,6 +152,13 @@ Function IsArray(value As Object) As Boolean
 End Function
 Function MsgBox(prompt As Object, Optional style As MsgBoxStyle = 0, Optional title As Object = Nothing) As MsgBoxResult
   promptTitles.Add(CStr(title))
+  If usePromptDefaults Then
+    Select Case (CInt(style) And &H300)
+      Case CInt(vbDefaultButton1) : Return vbYes
+      Case CInt(vbDefaultButton2) : Return vbNo
+      Case Else : Throw New Exception("unexpected prompt default")
+    End Select
+  End If
   Select Case CStr(title)
     Case "Export type" : Return modeAnswer
     Case "Imported parts filter" : Return importAnswer
@@ -165,8 +194,6 @@ Sub FinishDxfCandidate(ok As Boolean)
 End Sub
 Sub RebuildDocumentIfNeeded(model As Object)
 End Sub
-Sub ResolveSelectedPartIfLightweight(comp As Object)
-End Sub
 Function IsComponentHiddenSafe(comp As Object) As Boolean
   Return comp.Hidden
 End Function
@@ -176,19 +203,26 @@ End Function
 Function ComponentHasExcludedAssemblyAncestor(comp As Object, a As Boolean, b As Boolean) As Boolean
   Return comp.ExcludedParent
 End Function
-Function IsComponentLightweightSafe(comp As Object) As Boolean
-  Return False
-End Function
 Function ComponentBodiesMayBeSheetLike(comp As Object) As Boolean
   Return BodiesMayBeSheetLike(comp.Model.GetBodies2(0, False))
 End Function
 Function GetBodiesPlateDimensions(bodies As Object, ByRef t As Double, ByRef w As Double, ByRef length As Double) As Boolean
-  Dim body As TestBody = bodies(0)
+  Dim body As TestBody = bodies(LBound(bodies))
   t = body.Thickness : w = body.Width : length = body.Length
   Return body.Readable
 End Function
+Function BodiesContainOutOfSlabSolid(bodies As Object) As Boolean
+  For Each body As TestBody In bodies
+    If body.OutsideSlab And Not body.IsSheetMetal Then Return True
+  Next
+  Return False
+End Function
 Function EnsureSubFolder(folder As String, name As String) As String
   Return folder & name & "\\"
+End Function
+Function DxfFileBytes(file As String) As Double
+  If Not IO.File.Exists(file) Then Return -1
+  Return CDbl(New IO.FileInfo(file).Length)
 End Function
 Function IsPlanarFace(item As Object) As Boolean
   Return TypeOf item Is TestFace
@@ -212,14 +246,8 @@ Function VisibleDocumentSnapshotContains(entries As Object, model As Object) As 
   If entries Is Nothing Or model Is Nothing Then Return False
   Return entries.Exists(GetDocumentWindowKey(model))
 End Function
-Function GetModelWindowDocuments(ByRef ok As Boolean) As Collection
-  ok = windowsReadable
-  If Not ok Then Return Nothing
-  Dim result As New Collection
-  For Each model As TestDoc In swApp.Docs.Items
-    If model.WindowOpen Then result.Add(model)
-  Next
-  Return result
+Function ModelDocumentsAreSame(left As Object, right As Object) As Boolean
+  Return Object.ReferenceEquals(left, right)
 End Function
 Function ActivateModelDocument(model As Object) As Boolean
   If model Is Nothing Then Return False
@@ -264,9 +292,11 @@ Function ResetFixture() As TestDoc
   swApp = New TestApp : exports = New Collections.Generic.List(Of String) : traces = New Collections.Generic.List(Of String)
   promptTitles = New Collections.Generic.List(Of String)
   g_initiallyVisibleDocuments = Dict() : g_candidateOwnership = Dict() : g_originalConfigurations = Dict()
+  g_preservedDocuments = Dict() : g_remainingNewWindows = 0
   g_preflightToolbox = Dict() : g_preflightRejected = Dict() : g_partNameOwners = Dict() : g_folderNameOwners = Dict() : g_outputOwners = Dict() : g_candidateResults = Dict()
   g_candidateKey = "" : g_existingCount = 0 : g_missingOnly = True : g_assemblyFolders = False : g_candidateExisting = False : g_forceIdentityTags = False
   exportedFolders = New Collections.Generic.List(Of String) : groupAnswer = vbNo
+  usePromptDefaults = False
   g_stopBatchReason = "" : g_userCancelled = False : g_importHint = "" : g_importComponent = Nothing
   g_generalImportedFilter = False : stopAfter = 0 : pressed = False : controlDown = False : foregroundPid = 99 : windowsReadable = True
   contextCalls = 0 : lastFace = Nothing : modeAnswer = vbYes : importAnswer = vbNo : methodAnswer = vbNo
@@ -279,12 +309,28 @@ End Function
 Function Part(name As String, Optional loaded As Boolean = False) As TestDoc
   Dim model As New TestDoc With {.FilePath = "C:\\fixture\\" & name & ".SLDPRT", .Loaded = loaded, .Referenced = loaded}
   swApp.Docs.Add(LCase(model.FilePath), model)
+  If loaded Then
+    Dim assembly As TestDoc = swApp.Docs(LCase(g_runRootPath))
+    Dim references As New Collections.Generic.List(Of Object)(assembly.Components)
+    references.Add(Component(model)) : assembly.Components = references.ToArray()
+  End If
   Return model
 End Function
 Function Component(model As TestDoc, Optional cfg As String = "A") As TestComponent
   Return New TestComponent With {.FilePath = model.FilePath, .ReferencedConfiguration = cfg, .Model = model}
 End Function
 Sub Main()
+  For Each docType As Long In New Long() {swDocPART, swDocASSEMBLY}
+    For Each selectionCount As Long In New Long() {0, 1}
+      ResetFixture()
+      usePromptDefaults = True
+      Dim defaultMode As Integer, defaultMethod As Integer
+      Check(AskDxfRunOptions(docType, selectionCount, defaultMode, defaultMethod), "accept default prompts")
+      Check(defaultMode = MODE_REGULAR And defaultMethod = ASSEMBLY_EXPORT_REGULAR, "Enter defaults to regular referenced-part export")
+      Check(g_assemblyFolders = (docType = swDocASSEMBLY), "Enter defaults to parent-assembly folders only in assemblies")
+      Check(g_missingOnly And Not g_generalImportedFilter, "missing-only and import defaults unchanged")
+    Next
+  Next
   For Each kind In New String() {"single", "face", "selected", "selected-face", "subassembly", "full"}
     For Each method In New Integer() {1, 2, 3}
       If kind = "full" And method = 3 Then Continue For
@@ -347,13 +393,81 @@ Sub Main()
   Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "new document export")
   Check(Not p.Loaded And Not p.WindowOpen, "new unreferenced document unloaded")
   Check(swApp.LastOpenOptions = ${file.includes("ROfriendy") ? 3 : 1}, "variant read-only option retained")
-  For Each dirty As Boolean In New Boolean() {False, True}
-    root = ResetFixture() : p = Part("protected", True) : a = Component(p) : openedBatch = Dict()
-    p.Dirty = dirty : p.WindowOpen = Not dirty
-    If p.WindowOpen Then g_initiallyVisibleDocuments.Add(GetDocumentWindowKey(p), True)
-    Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "protected document export")
-    Check(p.WindowOpen And swApp.CloseCalls.Count = 0, "pre-existing window or unsaved document is not closed")
+  For Each visible As Boolean In New Boolean() {False, True}
+    For Each dirty As Boolean In New Boolean() {False, True}
+      root = ResetFixture() : p = Part("protected", True) : a = Component(p) : openedBatch = Dict()
+      p.Dirty = dirty : p.WindowOpen = visible
+      g_initiallyVisibleDocuments = BuildVisibleDocumentWindowKeyDict()
+      Dim initialCount = g_initiallyVisibleDocuments.Count
+      Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "protected document export")
+      Check(p.WindowOpen = visible And p.Loaded And p.Dirty = (dirty Or visible), "original visibility and pre-existing unsaved data retained")
+      Check(g_initiallyVisibleDocuments.Count = initialCount, "starting real-window snapshot is immutable")
+      Check(swApp.CloseCalls.Count = If(visible, 0, 1), "all macro-owned windows close, retaining referenced unsaved data")
+      Check(Not p.HiddenWindowResource, "no hidden taskbar/UI resource remains")
+      CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+      Check(g_remainingNewWindows = 0 And p.WindowOpen = visible, "final cleanup respects exact starting windows")
+    Next
   Next
+  For Each route In New String() {"full", "selected", "subassembly"}
+    For Each method As Integer In New Integer() {1, 2}
+      root = ResetFixture() : p = Part("hidden-unsaved", True) : a = Component(p) : p.Dirty = True
+      root.Components = New Object() {a}
+      doneBatch = Dict() : openedBatch = Dict()
+      Dim selected As Collection = Nothing, subDoc As TestDoc = Nothing
+      If route = "subassembly" Then
+        subDoc = New TestDoc With {.FilePath = "C:\\fixture\\unit.SLDASM", .DocType = 2, .Loaded = True, .Referenced = True, .Dirty = True, .Components = New Object() {a}}
+        swApp.Docs.Add(LCase(subDoc.FilePath), subDoc)
+        root.Components = New Object() {Component(subDoc), a}
+        selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = New Object() {Component(subDoc)}}, 1)
+      ElseIf route = "selected" Then
+        selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = New Object() {a}}, 1)
+      End If
+      g_initiallyVisibleDocuments = BuildVisibleDocumentWindowKeyDict()
+      If route = "full" Then
+        ProcessFullAssembly(root, "C:\\out\\", method, doneBatch, openedBatch)
+      Else
+        Dim counts As Object = Dict()
+        counts.Add(DxfCandidateScopeKey(p.FilePath, "A", a, root), 1)
+        ProcessSelectedComponents(root, selected, "C:\\out\\", MODE_REGULAR, method, counts, doneBatch, openedBatch)
+      End If
+      CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+      Check(doneBatch.Count = 1 And exports.Count = 1 And g_stopBatchReason = "", "dirty hidden component still exports in " & route & "/" & method)
+      Check(Not p.WindowOpen And p.Loaded And p.Dirty And p.Config = "ORIGINAL", "dirty hidden part returns to original state in " & route)
+      If subDoc IsNot Nothing Then Check(Not subDoc.WindowOpen And subDoc.Loaded And subDoc.Dirty, "dirty subassembly visibility restored")
+      Check(g_initiallyVisibleDocuments.Count = 1 And g_remainingNewWindows = 0 And swApp.CloseCalls.Count >= 1, "real closure without polluted baseline in " & route)
+      Check(Not p.HiddenWindowResource, "no taskbar proxy left in " & route)
+    Next
+  Next
+  root = ResetFixture() : openedBatch = Dict()
+  g_initiallyVisibleDocuments = BuildVisibleDocumentWindowKeyDict()
+  For i As Integer = 1 To 12
+    p = Part("unsaved-" & i, True) : p.Dirty = True : a = Component(p)
+    Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "batch dirty candidate exports")
+    Check(Not p.WindowOpen And p.Loaded And p.Dirty And openedBatch.Count = 0, "batch restores hidden unsaved state each time")
+  Next
+  CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+  Check(g_initiallyVisibleDocuments.Count = 1 And BuildVisibleDocumentWindowKeyDict().Count = 1 And g_remainingNewWindows = 0, "one-window baseline remains one window after dirty batch")
+  Check(swApp.CloseCalls.Count = 12 And swApp.PeakWindows <= 2 And swApp.ProxyCount = 1, "close real UI without discarding dirty data or accumulating taskbar entries")
+  ActivateModelDocument(p)
+  CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+  Check(Not p.WindowOpen And p.Loaded And p.Dirty And swApp.CloseCalls.Count = 13 And swApp.ProxyCount = 1, "final sweep closes reappearing unsaved part UI but retains its data")
+  Check(g_initiallyVisibleDocuments.Count = 1 And g_remainingNewWindows = 0, "final sweep retains the real original-window snapshot")
+  root = ResetFixture() : p = Part("close-failure", True) : p.Dirty = True : p.IgnoreClose = True : a = Component(p) : openedBatch = Dict()
+  Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "failed visibility restore cannot claim success")
+  CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+  Check(g_stopBatchReason <> "" And p.WindowOpen And p.Loaded And p.Dirty And swApp.CloseCalls.Count = 1, "failed close stops without repeated attempts or discarding data")
+  Check(g_initiallyVisibleDocuments.Count = 1 And g_remainingNewWindows = 1, "preserved new window is reported, not relabeled original")
+  root = ResetFixture() : p = Part("unreferenced-dirty", True) : p.Dirty = True : a = Component(p) : openedBatch = Dict()
+  root.Components = New Object() {}
+  Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "dirty document without a live assembly reference is not closed")
+  Check(p.Loaded And p.Dirty And swApp.CloseCalls.Count = 0 And g_stopBatchReason <> "", "missing reference fails closed")
+  root = ResetFixture() : p = Part("unreadable-unsaved-state", True) : p.FailSaveFlag = True : a = Component(p) : openedBatch = Dict()
+  Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "unknown dirty state stops before activation")
+  Check(g_stopBatchReason <> "" And Not p.WindowOpen And p.Loaded And swApp.CloseCalls.Count = 0 And g_initiallyVisibleDocuments.Count = 1, "unknown ownership leaves data alone")
+  root = ResetFixture() : windowsReadable = False
+  Check(BuildVisibleDocumentWindowKeyDict() Is Nothing, "failed real-window snapshot fails closed")
+  CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+  Check(g_remainingNewWindows = -1 And swApp.CloseCalls.Count = 0, "unverified cleanup cannot claim zero leftovers")
   For Each failure In New String() {"export", "configuration", "close", "restore"}
     root = ResetFixture() : p = Part("failure", True) : a = Component(p) : openedBatch = Dict()
     p.ExportError = failure = "export" : p.IgnoreClose = failure = "close" : p.BreakRestore = failure = "restore"
@@ -361,6 +475,11 @@ Sub Main()
     Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "failed candidate must not report success")
     If failure = "close" Or failure = "restore" Then
       Check(g_stopBatchReason <> "" And p.WindowOpen, "unsafe cleanup stops batch and leaves document available")
+      If failure = "restore" Then
+        Dim beforeClose = swApp.CloseCalls.Count
+        CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
+        Check(g_initiallyVisibleDocuments.Count = 1 And g_remainingNewWindows = 1 And swApp.CloseCalls.Count = beforeClose, "restore-failed window is explicitly preserved and counted")
+      End If
       Dim priorCount = exports.Count
       Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "unsafe cleanup blocks subsequent candidates")
       Check(exports.Count = priorCount, "no new exports after cleanup failure")
@@ -396,10 +515,11 @@ Sub Main()
     Check(Not CloseTemporaryExportDocument(intendedPath, p.GetTitle()), "unclosed temporary document fails verification even after failed save")
     Check(g_stopBatchReason <> "" And root.WindowOpen, "temporary closure failure stops batch without closing root")
   Next
-  For Each reason In New String() {"toolbox", "solid-section"}
+  For Each reason In New String() {"toolbox", "solid-section", "bent-solid"}
     root = ResetFixture() : p = Part("preflight", True) : p.Config = "A" : a = Component(p) : b = Component(p)
     p.Toolbox = reason = "toolbox"
     If reason = "solid-section" Then p.Body.Thickness = 40 : p.Body.Width = 40 : p.Body.Length = 600
+    p.Body.OutsideSlab = reason = "bent-solid"
     root.Components = New Object() {a, b} : doneBatch = Dict() : openedBatch = Dict()
     ProcessFullAssembly(root, "C:\\out\\", 1, doneBatch, openedBatch)
     Check(exports.Count = 0 And swApp.LastOpenOptions = 0 And swApp.PeakWindows <= 1 And Not p.WindowOpen, "known " & reason & " never opened/activated")
@@ -413,6 +533,161 @@ Sub Main()
     Dim preferred As Object = If(exception = "selected-face", New TestFace With {.Owner = a}, Nothing)
     Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", exception = "selected-face", openedBatch, If(exception = "precut", 2, 1), preferred), "early filter must preserve " & exception)
     Check(exports.Count = 1, "uncertain/explicit exception reaches normal exporter")
+  Next
+  For Each loaded As Boolean In New Boolean() {False, True}
+    For Each state As Long In New Long() {2, 3}
+      root = ResetFixture() : p = Part("reference-section", loaded) : a = Component(p) : openedBatch = Dict()
+      a.State = state
+      a.Bodies = New Object() {New TestBody With {.Thickness = 100, .Width = 100, .Length = 850}}
+      a.BodyInfo = New Object() {1}
+      Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "reference configuration section rejected before open")
+      Check(exports.Count = 0 And swApp.LastOpenOptions = 0 And swApp.PeakWindows <= 1 And Not p.WindowOpen, "reference section never opened/activated")
+      Check(p.Config = "ORIGINAL" And p.Loaded = loaded And Not p.Dirty And openedBatch.Count = 0, "preflight does not mutate the source or own a window")
+      Check(a.BodyReads = 1 And g_preflightRejected.Exists(LCase(p.FilePath) & "@A"), "normal reference rejection cached per configuration")
+      Check(Not CandidatePreflightAllows(a, p.FilePath, "A", False, 1, False) And a.BodyReads = 1, "repeat normal reference uses proven rejection without reading again")
+      Check(traces.Exists(Function(t) t.Contains("source=normal-component-bodies")), "reference geometry source diagnosed")
+    Next
+  Next
+  For Each exception In New String() {"sheetmetal", "later-sheetmetal-body", "thin", "unknown-geometry", "body-error", "missing-info", "missing-bodies", "empty-bodies", "short-info", "long-info", "nonarray-info", "nonarray-bodies", "user-body", "later-user-body", "unknown-kind", "null-kind", "empty-kind", "string-kind", "wrong-path", "wrong-config", "empty-config", "suppression-error", "selected-face", "precut"}
+    root = ResetFixture() : p = Part("reference-defer", True) : a = Component(p) : openedBatch = Dict()
+    Dim section As New TestBody With {.Thickness = 100, .Width = 100, .Length = 850}
+    a.Bodies = New Object() {section} : a.BodyInfo = New Object() {1}
+    Dim requestCfg As String = "A"
+    Select Case exception
+      Case "sheetmetal" : section.IsSheetMetal = True
+      Case "later-sheetmetal-body" : a.Bodies = New Object() {section, New TestBody With {.IsSheetMetal = True}} : a.BodyInfo = New Object() {1, 1}
+      Case "thin" : section.Thickness = 3
+      Case "unknown-geometry" : section.Readable = False
+      Case "body-error" : a.FailBodies = True
+      Case "missing-info" : a.BodyInfo = Nothing
+      Case "missing-bodies" : a.Bodies = Nothing
+      Case "empty-bodies" : a.Bodies = New Object() {} : a.BodyInfo = New Object() {}
+      Case "short-info" : a.BodyInfo = New Object() {}
+      Case "long-info" : a.BodyInfo = New Object() {1, 1}
+      Case "nonarray-info" : a.BodyInfo = 1
+      Case "nonarray-bodies" : a.Bodies = section
+      Case "user-body" : a.BodyInfo = New Object() {0}
+      Case "later-user-body" : a.Bodies = New Object() {section, section} : a.BodyInfo = New Object() {1, 0}
+      Case "unknown-kind" : a.BodyInfo = New Object() {99}
+      Case "null-kind" : a.BodyInfo = New Object() {DBNull.Value}
+      Case "empty-kind" : a.BodyInfo = New Object() {Nothing}
+      Case "string-kind" : a.BodyInfo = New Object() {"1"}
+      Case "wrong-path" : a.FilePath = "C:\\fixture\\other.SLDPRT"
+      Case "wrong-config" : a.ReferencedConfiguration = "B"
+      Case "empty-config" : requestCfg = "" : a.ReferencedConfiguration = ""
+      Case "suppression-error" : a.FailSuppression = True
+    End Select
+    Check(CandidatePreflightAllows(a, p.FilePath, requestCfg, False, If(exception = "precut", 2, 1), exception = "selected-face"), "reference preflight preserves " & exception)
+    Check(g_preflightRejected.Count = 0 And swApp.LastOpenOptions = 0 And Not p.WindowOpen And p.Config = "ORIGINAL" And Not p.Dirty, "uncertain/excepted reference never cached or altered: " & exception)
+    If exception = "selected-face" Or exception = "precut" Or exception = "suppression-error" Or exception.StartsWith("wrong-") Or exception = "empty-config" Then Check(a.BodyReads = 0, "bypass checks no reference geometry: " & exception)
+  Next
+  For Each state As Long In New Long() {-1, 0, 1, 4, 5, 99}
+    root = ResetFixture() : p = Part("reference-unresolved", True) : a = Component(p)
+    a.State = state : a.Bodies = New Object() {New TestBody With {.Thickness = 100}} : a.BodyInfo = New Object() {1}
+    Check(CandidatePreflightAllows(a, p.FilePath, "A", False, 1, False), "uncertain component state defers: " & CStr(state))
+    Check(a.BodyReads = 0 And g_preflightRejected.Count = 0, "unresolved/unknown component not inspected or cached")
+  Next
+  root = ResetFixture() : p = Part("reference-config-cache", True) : a = Component(p) : b = Component(p, "B")
+  a.Bodies = New Object() {New TestBody With {.Thickness = 100}} : a.BodyInfo = New Object() {1}
+  b.Bodies = New Object() {New TestBody} : b.BodyInfo = New Object() {1}
+  Check(Not CandidatePreflightAllows(a, p.FilePath, "A", False, 1, False), "reject thick configuration A")
+  Check(CandidatePreflightAllows(b, p.FilePath, "B", False, 1, False) And b.BodyReads = 1, "configuration A cannot reject thin configuration B")
+  Check(CandidatePreflightAllows(a, p.FilePath, "A", False, 1, True), "explicit face bypasses cached thickness rejection")
+  Check(CandidatePreflightAllows(a, p.FilePath, "A", False, 2, False), "precut bypasses cached thickness rejection")
+  Check(CandidatePreflightAllows(Nothing, p.FilePath, "C", False, 1, False), "missing component and wrong source configuration defer")
+  root = ResetFixture() : p = Part("reference-aligned-info", True) : a = Component(p)
+  Dim shiftedBodies As Array = Array.CreateInstance(GetType(Object), New Integer() {1}, New Integer() {2})
+  Dim shiftedInfo As Array = Array.CreateInstance(GetType(Integer), New Integer() {1}, New Integer() {4})
+  shiftedBodies.SetValue(New TestBody With {.Thickness = 100}, 2) : shiftedInfo.SetValue(1, 4)
+  a.Bodies = shiftedBodies : a.BodyInfo = shiftedInfo
+  Check(Not CandidatePreflightAllows(a, p.FilePath, "A", False, 1, False), "body flags align by position, not equal array lower bound")
+  root = ResetFixture() : p = Part("matching-source", True) : p.Config = "A" : a = Component(p)
+  a.Bodies = New Object() {New TestBody With {.Thickness = 100}} : a.BodyInfo = New Object() {0}
+  Check(CandidatePreflightAllows(a, p.FilePath, "A", False, 1, False) And a.BodyReads = 0, "matching source configuration stays primary, ignores assembly-modified bodies")
+  For Each route In New String() {"full", "selected", "subassembly"}
+    root = ResetFixture() : p = Part("reference-route", True) : a = Component(p)
+    a.Bodies = New Object() {New TestBody With {.Thickness = 100, .Width = 100, .Length = 850}} : a.BodyInfo = New Object() {1}
+    root.Components = New Object() {a}
+    Dim selected As Collection, subDoc As TestDoc = Nothing
+    If route = "subassembly" Then
+      subDoc = New TestDoc With {.FilePath = "C:\\fixture\\reference-scope.SLDASM", .DocType = 2, .Loaded = True, .Referenced = True, .Components = root.Components}
+      swApp.Docs.Add(LCase(subDoc.FilePath), subDoc)
+      selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = New Object() {Component(subDoc)}}, 1)
+    Else
+      selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = root.Components}, 1)
+    End If
+    doneBatch = Dict() : openedBatch = Dict()
+    If route = "full" Then
+      ProcessFullAssembly(root, "C:\\out\\", 1, doneBatch, openedBatch)
+    Else
+      Dim qty As Object = Dict() : qty.Add(LCase(p.FilePath) & "@A", 1)
+      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, 1, qty, doneBatch, openedBatch)
+    End If
+    Check(exports.Count = 0 And a.BodyReads = 1 And Not p.WindowOpen And p.Config = "ORIGINAL", "reference body preflight rejects before part activation in " & route)
+    Check(openedBatch.Count = 0 And Not swApp.CloseCalls.Contains(p.FilePath), "rejected part never acquired in " & route)
+  Next
+  For Each context As Boolean In New Boolean() {False, True}
+    For Each state As Long In New Long() {1, 4}
+      For Each kind In New String() {"beam", "beam-other-config", "thin", "sheetmetal", "unknown", "assembly-user-body", "toolbox", "selected-face", "precut"}
+        If context And (kind = "precut" Or kind = "assembly-user-body") Then Continue For
+        root = ResetFixture() : p = Part("lightweight", False) : p.Config = "A" : a = Component(p) : a.State = state : openedBatch = Dict()
+        p.Body.Thickness = 40 : p.Body.Width = 40 : p.Body.Length = 600
+        If kind = "thin" Then p.Body.Thickness = 3
+        p.Body.IsSheetMetal = kind = "sheetmetal" : p.Body.Readable = kind <> "unknown"
+        p.Toolbox = kind = "toolbox"
+        a.Bodies = New Object() {p.Body} : a.BodyInfo = New Object() {1}
+        If kind = "beam-other-config" Or kind = "assembly-user-body" Then p.Config = "OTHER"
+        If kind = "assembly-user-body" Then a.BodyInfo = New Object() {0}
+        Dim originalConfig As String = p.Config
+        Dim preferred As Object = If(kind = "selected-face", New TestFace With {.Owner = a}, Nothing)
+        Dim shouldReject As Boolean = kind = "beam" Or kind = "beam-other-config" Or kind = "toolbox"
+        Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", context, openedBatch, If(kind = "precut", 2, 1), preferred) <> shouldReject, "post-resolve decision: " & kind & "/" & CStr(context))
+        Check(a.ResolveCalls = 1 And a.State = 3, "exactly the existing per-component resolve, no duplicate resolve")
+        Check(p.Config = originalConfig And root.WindowOpen And Not p.WindowOpen And openedBatch.Count = 0, "post-resolve source configuration/window cleanup preserved")
+        Check(traces.Exists(Function(t) t.Contains("phase=after-resolve-attempt")), "post-resolve phase is traced")
+        If shouldReject Then
+          Check(exports.Count = 0 And swApp.PeakWindows <= 1 And swApp.LastOpenOptions = 0 And swApp.CloseCalls.Count = 0 And Not p.Dirty, "resolved non-sheet/Toolbox never opened, activated or acquired")
+          Check(Not traces.Exists(Function(t) t.StartsWith("cleanup acquired")), "rejected resolved component does not enter ownership tracking")
+        Else
+          Check(exports.Count = 1, "resolved exceptions still reach exporter")
+        End If
+      Next
+    Next
+  Next
+  For Each context As Boolean In New Boolean() {False, True}
+    root = ResetFixture() : p = Part("failed-resolve") : a = Component(p) : a.State = 1 : a.FailResolve = True : openedBatch = Dict()
+    Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", context, openedBatch) <> context, "failed resolve retains regular fallback and context rejection")
+    Check(a.ResolveCalls = 1 And a.State = 1, "failed resolve is not retried in a loop")
+    If context Then Check(swApp.LastOpenOptions = 0 And exports.Count = 0, "unresolved context never opened")
+  Next
+  root = ResetFixture() : p = Part("changed-on-resolve") : a = Component(p) : a.State = 1 : a.ResolveReference = "B" : openedBatch = Dict()
+  Check(Not ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "configuration change during resolve stops candidate")
+  Check(a.ResolveCalls = 1 And swApp.LastOpenOptions = 0 And exports.Count = 0, "changed instance does not open wrong configuration")
+  root = ResetFixture() : p = Part("already-resolved", True) : p.Config = "A" : a = Component(p) : openedBatch = Dict()
+  Check(ExportAssemblyCandidate(root, a, p.FilePath, "A", 1, "C:\\out\\", False, openedBatch), "resolved plate unchanged")
+  Check(a.ResolveCalls = 0 And Not traces.Exists(Function(t) t.Contains("phase=after-resolve-attempt")), "resolved parts do not get extra resolution or duplicate precheck")
+  For Each route In New String() {"full", "full-context", "selected", "selected-context", "subassembly", "subassembly-context"}
+    root = ResetFixture() : p = Part("lightweight-route") : p.Config = "A" : a = Component(p) : a.State = 1
+    p.Body.Thickness = 100 : p.Body.Width = 100 : p.Body.Length = 850
+    root.Components = New Object() {a}
+    Dim selected As Collection
+    If route.StartsWith("subassembly") Then
+      Dim subDoc As New TestDoc With {.FilePath = "C:\\fixture\\lightweight-scope.SLDASM", .DocType = 2, .Loaded = True, .Referenced = True, .Components = root.Components}
+      swApp.Docs.Add(LCase(subDoc.FilePath), subDoc)
+      selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = New Object() {Component(subDoc)}}, 1)
+    Else
+      selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = root.Components}, 1)
+    End If
+    doneBatch = Dict() : openedBatch = Dict()
+    Dim method As Integer = If(route.EndsWith("context"), 2, 1)
+    If route.StartsWith("full") Then
+      ProcessFullAssembly(root, "C:\\out\\", method, doneBatch, openedBatch)
+    Else
+      Dim qty As Object = Dict() : qty.Add(LCase(p.FilePath) & "@A", 1)
+      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, method, qty, doneBatch, openedBatch)
+    End If
+    Check(exports.Count = 0 And a.ResolveCalls = 1 And Not p.WindowOpen And p.Config = "A", "lightweight beam rejected before activation in " & route)
+    Check(openedBatch.Count = 0 And Not swApp.CloseCalls.Contains(p.FilePath), "lightweight beam never acquired in " & route)
   Next
   For Each group As Boolean In New Boolean() {False, True}
     For Each route In New String() {"full", "selected", "subassembly", "subassembly-context"}
@@ -474,7 +749,7 @@ Sub Main()
   b.Parent = New TestComponent With {.FilePath = "C:\\two\\unit.SLDASM", .ReferencedConfiguration = "Default"}
   BuildDxfNameInventory(root)
   Check(CandidateExportFolder("C:\\out\\", root, a) <> CandidateExportFolder("C:\\out\\", root, b), "same-name assemblies in different directories have different folders")
-  Console.WriteLine("DXF option/route matrix, 120-candidate cleanup, failures, protected documents and cancellation passed.")
+  Console.WriteLine("DXF option/route matrix, referenced/lightweight preflight, 120-candidate cleanup, failures, protected documents and cancellation passed.")
 End Sub
 End Module
 Class TestApp
@@ -483,6 +758,20 @@ Class TestApp
   Public CloseCalls As New Collections.Generic.List(Of String)
   Public PeakWindows As Integer, LastOpenOptions As Long
   Public IgnoreQuit As Boolean
+  ReadOnly Property ProxyCount As Integer
+    Get
+      Dim count As Integer
+      For Each model As TestDoc In Docs.Items
+        If model.WindowOpen Or model.HiddenWindowResource Then count += 1
+      Next
+      Return count
+    End Get
+  End Property
+  ReadOnly Property Frame As TestFrame
+    Get
+      Return New TestFrame With {.App = Me}
+    End Get
+  End Property
   Function GetOpenDocumentByName(file As String) As Object
     For Each model As TestDoc In Docs.Items
       If model.Loaded And (String.Equals(model.FilePath, file, StringComparison.OrdinalIgnoreCase) Or String.Equals(model.GetTitle(), file, StringComparison.OrdinalIgnoreCase)) Then Return model
@@ -501,7 +790,8 @@ Class TestApp
     CloseCalls.Add(file)
     If model Is Nothing Then Return
     If model.IgnoreClose Then Return
-    model.WindowOpen = False : model.Loaded = model.Referenced
+    model.WindowOpen = False : model.HiddenWindowResource = False
+    model.Loaded = model.Referenced : model.Dirty = False
   End Sub
   Sub QuitDoc(title As String)
     If Not IgnoreQuit Then CloseDoc(title)
@@ -509,17 +799,44 @@ Class TestApp
   Sub Measure()
     Dim count As Integer
     For Each model As TestDoc In Docs.Items
-      If model.WindowOpen Then count += 1
+      If model.WindowOpen Or model.HiddenWindowResource Then count += 1
     Next
     PeakWindows = Math.Max(PeakWindows, count)
   End Sub
 End Class
+Class TestFrame
+  Public App As TestApp
+  ReadOnly Property ModelWindows As Object
+    Get
+      If Not Lifecycle.windowsReadable Then Throw New Exception("Window snapshot unavailable")
+      Dim result As New Collections.Generic.List(Of Object)
+      For Each model As TestDoc In App.Docs.Items
+        If model.WindowOpen Then result.Add(New TestModelWindow With {.ModelDoc = model})
+      Next
+      Return result.ToArray()
+    End Get
+  End Property
+End Class
+Class TestModelWindow
+  Public ModelDoc As TestDoc
+End Class
 Class TestDoc
   Public FilePath As String, DocType As Long = 1, Config As String = "ORIGINAL", FailConfig As String = ""
   Public Loaded As Boolean, Referenced As Boolean, WindowOpen As Boolean, Dirty As Boolean
+  Public HiddenWindowResource As Boolean, IgnoreHide As Boolean, FailSaveFlag As Boolean
   Public Imported As Boolean, Washer As Boolean, Toolbox As Boolean, ExportError As Boolean, IgnoreClose As Boolean, BreakRestore As Boolean
   Public Components As Object() = New Object() {}
   Public Body As New TestBody
+  Property Visible As Boolean
+    Get
+      Return WindowOpen
+    End Get
+    Set(value As Boolean)
+      If Not value And IgnoreHide Then Return
+      HiddenWindowResource = WindowOpen And Not value
+      WindowOpen = value
+    End Set
+  End Property
   ReadOnly Property Extension As TestExtension
     Get
       Return New TestExtension With {.ToolboxPartType = If(Toolbox, 1, 0)}
@@ -536,8 +853,12 @@ Class TestDoc
     Return IO.Path.GetFileName(FilePath)
   End Function
   Function GetSaveFlag() As Boolean
+    If FailSaveFlag Then Throw New Exception("Save state unavailable")
     Return Dirty
   End Function
+  Sub SetSaveFlag()
+    Dirty = True
+  End Sub
   Function GetComponents(top As Boolean) As Object
     Return Components
   End Function
@@ -554,6 +875,29 @@ Class TestComponent
   Public FilePath As String, ReferencedConfiguration As String, Name2 As String = "fixture-instance"
   Public Hidden As Boolean, Suppressed As Boolean, ExcludedParent As Boolean, Imported As Boolean
   Public Parent As TestComponent, Model As TestDoc
+  Public Bodies As Object, BodyInfo As Object, State As Long = 3, BodyReads As Integer
+  Public FailBodies As Boolean, FailSuppression As Boolean
+  Public ResolveCalls As Integer, FailResolve As Boolean, ResolveReference As String = ""
+  Function SetSuppression2(value As Long) As Long
+    ResolveCalls += 1
+    If FailResolve Then Return 1
+    State = value : Model.Loaded = True : Model.Referenced = True
+    If ResolveReference <> "" Then ReferencedConfiguration = ResolveReference
+    Return 0
+  End Function
+  Function GetBodies3(kind As Long, ByRef info As Object) As Object
+    BodyReads += 1
+    If FailBodies Then Throw New Exception("component geometry unavailable")
+    info = BodyInfo
+    Return Bodies
+  End Function
+  Function GetSuppression2() As Long
+    If FailSuppression Then Throw New Exception("component state unavailable")
+    Return State
+  End Function
+  Function GetSuppression() As Long
+    Return GetSuppression2()
+  End Function
   Function GetParent() As Object
     Return Parent
   End Function
@@ -570,6 +914,7 @@ End Class
 Class TestBody
   Public Thickness As Double = 3, Width As Double = 100, Length As Double = 200
   Public IsSheetMetal As Boolean, Readable As Boolean = True
+  Public OutsideSlab As Boolean
 End Class
 Class TestFace
   Public Owner As TestComponent
