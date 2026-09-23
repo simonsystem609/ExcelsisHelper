@@ -1,7 +1,3 @@
-' Read-only-friendly project variant generated on 2026-05-18.
-' Original macro left untouched. This variant should only write independent output files.
-' Source: DXF_v16.swb
-
 Option Explicit
 
 
@@ -29,7 +25,6 @@ Const swViewDisplayHideAllTypes As Long = 198
 Const swSaveAsCurrentVersion      As Long = 0
 Const swSaveAsOptions_Silent      As Long = 1
 Const swOpenDocOptions_Silent     As Long = 1
-Const swOpenDocOptions_ReadOnly   As Long = 2
 Const swExportToDWG_ExportSheetMetal As Long = 1
 Const swExportToDWG_ExportSelectedFacesOrLoops As Long = 2
 Const swExportToDWG_ExportAnnotationViews As Long = 3
@@ -107,7 +102,7 @@ Dim g_candidateReason As String
 Dim g_importComponent As Object
 Dim g_importUnknown As Boolean
 Dim g_importHint As String
-Const DXF_FILTER_REVISION As String = "2026-09-20-flat-slab-ui-close-1"
+Const DXF_FILTER_REVISION As String = "2026-09-23-selected-quantities-1"
 Dim g_outputStageRoot As String
 Dim g_outputStageSequence As Long
 
@@ -259,7 +254,7 @@ Private Sub ExcelsisStartMacroRunMarker()
     If Not fso.FolderExists(root) Then fso.CreateFolder root
     gExcelsisMacroMarkerPayload = "{""schema"":""excelsis-helper-macro-run-v1"",""pid"":" & _
         CStr(ExcelsisGetCurrentProcessId()) & ",""startedAt"":""" & _
-        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""DXF_v16_ROfriendy.swp""}"
+        Format$(Now, "yyyy-mm-dd\Thh:nn:ss") & """,""macroName"":""DXF_v16.swp""}"
     Set markerFile = fso.CreateTextFile(root & "\macro-running.json", True, False)
     markerFile.Write gExcelsisMacroMarkerPayload
     markerFile.Close
@@ -862,21 +857,8 @@ Private Sub ExcelsisMacroMain()
 
         Debug.Print "--- Assembly with selection ---"
 
-        Dim dictQty As Object
-
-        If mode = MODE_REGULAR And _
-           assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
-
-            Set dictQty = BuildAssemblyContextQtyDict(swModel)
-
-        Else
-
-            Set dictQty = BuildQtyDict(swModel)
-
-        End If
-
         ProcessSelectedComponents swModel, selectedCandidates, dxfFolder, mode, _
-                                  assemblyExportMethod, dictQty, dictDone, dictOpened
+                                  assemblyExportMethod, dictDone, dictOpened
 
     Else
 
@@ -1153,7 +1135,7 @@ Failed:
     Err.Raise 5, "DXF existing-file check", "Could not safely inspect output: " & filePath
 End Function
 
-Function NormalizeVisiblePartScopes(visibleParts As Object) As Object
+Function NormalizeVisiblePartScopes(visibleParts As Object, Optional ByVal selectedQty As Object = Nothing) As Object
     Dim result As Object, k As Variant, candidate As Variant, prior As Variant, key As String
     Set result = CreateObject("Scripting.Dictionary")
     For Each k In visibleParts.Keys
@@ -1168,6 +1150,17 @@ Function NormalizeVisiblePartScopes(visibleParts As Object) As Object
             result.Add key, candidate
         End If
     Next k
+    If Not selectedQty Is Nothing Then
+        For Each k In result.Keys
+            If selectedQty.Exists(CStr(k)) Then
+                candidate = result(k)
+                candidate(2) = CLng(selectedQty(k))
+                result(k) = candidate
+            Else
+                result.Remove k
+            End If
+        Next k
+    End If
     Set NormalizeVisiblePartScopes = result
 End Function
 
@@ -1764,135 +1757,85 @@ End Function
 
 ' ================================================================
 
-Function BuildQtyDict(swModel As Object) As Object
+Function DxfOccurrenceKey(ByVal swComp As Object) As String
+    If swComp Is Nothing Then Err.Raise 5, "DXF quantity", "A selected component is unavailable."
+    DxfOccurrenceKey = LCase$(Trim$(CStr(swComp.Name2)))
+    If DxfOccurrenceKey = "" Then Err.Raise 5, "DXF quantity", "A component occurrence has no identity."
+End Function
 
-    Dim d As Object
-
-    Set d = CreateObject("Scripting.Dictionary")
-
-    Dim vc As Variant
-
-    vc = swModel.GetComponents(False)
-
-    If IsEmpty(vc) Then
-
-        Set BuildQtyDict = d
-
-        Exit Function
-
-    End If
-
-    Dim i As Long
-
-    Dim c As Object
-
-    For i = 0 To UBound(vc)
-
-        Set c = vc(i)
-
-        If Not c Is Nothing Then
-
-            If (Not IsComponentActuallySuppressedSafe(c)) And (Not IsComponentHiddenSafe(c)) Then
-
-                If ComponentHasExcludedAssemblyAncestor(c, False, False) Then GoTo NextQtyComp
-
-                Dim p As String
-
-                p = c.GetPathName
-
-                If p = "" Then GoTo NextQtyComp
-
-                If Not IsPartPath(p) And Not IsAssemblyPath(p) Then GoTo NextQtyComp
-
-                Dim k As String
-                k = DxfCandidateScopeKey(p, c.ReferencedConfiguration, c, swModel)
-                If d.Exists(k) Then
-
-                    d(k) = d(k) + 1
-
-                Else
-
-                    d.Add k, 1
-
-                End If
-
-            End If
-
+Sub AddDxfOccurrence(ByVal occurrences As Object, ByVal key As String, ByVal candidate As Variant)
+    Dim prior As Variant
+    If occurrences.Exists(key) Then
+        prior = occurrences(key)
+        If StrComp(CStr(prior(0)), CStr(candidate(0)), vbTextCompare) <> 0 Or _
+           StrComp(CStr(prior(1)), CStr(candidate(1)), vbTextCompare) <> 0 Then
+            Err.Raise 5, "DXF quantity", "A component occurrence changed while quantities were captured."
         End If
+        If CStr(prior(3)) = "" Then prior(3) = candidate(3)
+        occurrences(key) = prior
+    Else
+        occurrences.Add key, candidate
+    End If
+End Sub
 
-NextQtyComp:
+Sub MergeDxfOccurrences(ByVal target As Object, ByVal source As Object)
+    Dim key As Variant, candidate As Variant
+    If source Is Nothing Then Err.Raise 5, "DXF quantity", "A selected subtree was not captured."
+    For Each key In source.Keys
+        candidate = source(key)
+        AddDxfOccurrence target, CStr(key), candidate
+    Next key
+End Sub
 
-    Next i
-    Set BuildQtyDict = d
-
+Function BuildSelectedQtyDict(selectedCandidates As Collection) As Object
+    Dim occurrences As Object, quantities As Object, record As Variant, candidate As Variant
+    Dim visibleParts As Object, swComp As Object, key As Variant, scopeKey As String
+    Set occurrences = CreateObject("Scripting.Dictionary")
+    Set quantities = CreateObject("Scripting.Dictionary")
+    For Each record In selectedCandidates
+        If IsAssemblyPath(CStr(record(4))) Then
+            Set visibleParts = record(6)
+            MergeDxfOccurrences occurrences, visibleParts
+        Else
+            candidate = Array(record(4), record(5), 1&, "", Nothing)
+            Set candidate(4) = record(3)
+            AddDxfOccurrence occurrences, CStr(record(7)), candidate
+        End If
+    Next record
+    ' Count the union of selected occurrences before the first document operation.
+    For Each key In occurrences.Keys
+        candidate = occurrences(key)
+        Set swComp = candidate(4)
+        If IsComponentActuallySuppressedSafe(swComp) Or IsComponentHiddenSafe(swComp) Or _
+           ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then
+            TraceRun "quantity skip=hidden-or-suppressed instance=" & DiagnosticLineValue(CStr(key))
+            GoTo NextOccurrence
+        End If
+        If StrComp(CStr(swComp.GetPathName), CStr(candidate(0)), vbTextCompare) <> 0 Or _
+           StrComp(CStr(swComp.ReferencedConfiguration), CStr(candidate(1)), vbTextCompare) <> 0 Then
+            Err.Raise 5, "DXF quantity", "A selected occurrence changed file or configuration."
+        End If
+        scopeKey = DxfCandidateScopeKey(CStr(candidate(0)), CStr(candidate(1)), swComp, Nothing)
+        If quantities.Exists(scopeKey) Then
+            quantities(scopeKey) = CLng(quantities(scopeKey)) + 1
+        Else
+            quantities.Add scopeKey, 1&
+        End If
+        TraceRun "quantity selected-instance=" & DiagnosticLineValue(CStr(key)) & _
+                 " scope=" & DiagnosticLineValue(scopeKey)
+NextOccurrence:
+    Next key
+    For Each key In quantities.Keys
+        TraceRun "quantity scope=selection key=" & DiagnosticLineValue(CStr(key)) & _
+                 " occurrences=" & CStr(quantities(key))
+    Next key
+    Set BuildSelectedQtyDict = quantities
 End Function
 
 
 
 ' ================================================================
 
-Function BuildAssemblyContextQtyDict(swModel As Object) As Object
-
-    Dim d As Object
-
-    Set d = CreateObject("Scripting.Dictionary")
-
-    Dim components As Variant
-
-    components = swModel.GetComponents(False)
-
-    If IsEmpty(components) Then
-
-        Set BuildAssemblyContextQtyDict = d
-
-        Exit Function
-
-    End If
-
-    Dim i As Long
-
-    For i = 0 To UBound(components)
-
-        Dim swComp As Object
-
-        Set swComp = components(i)
-
-        If swComp Is Nothing Then GoTo NextContextQtyComponent
-
-        If IsComponentActuallySuppressedSafe(swComp) Then GoTo NextContextQtyComponent
-
-        If IsComponentHiddenSafe(swComp) Then GoTo NextContextQtyComponent
-
-        If ComponentHasExcludedAssemblyAncestor(swComp, False, False) Then GoTo NextContextQtyComponent
-
-        Dim partPath As String
-
-        partPath = swComp.GetPathName
-
-        If Not IsPartPath(partPath) And _
-           Not IsAssemblyPath(partPath) Then GoTo NextContextQtyComponent
-
-        Dim fullKey As String
-
-        fullKey = DxfCandidateScopeKey(partPath, swComp.ReferencedConfiguration, swComp, swModel)
-
-        If d.Exists(fullKey) Then
-
-            d(fullKey) = CLng(d(fullKey)) + 1
-
-        Else
-
-            d.Add fullKey, 1
-
-        End If
-
-NextContextQtyComponent:
-
-    Next i
-
-    Set BuildAssemblyContextQtyDict = d
-
-End Function
 
 ' ================================================================
 
@@ -2576,7 +2519,7 @@ Function SnapshotSelectedComponents(swModel As Object, selMgr As Object, selCoun
             TraceRun "selection-snapshot skip=unsupported-document index=" & CStr(s)
             GoTo NextSelection
         End If
-        record = Array(s, selType, Nothing, Nothing, partPath, cfg, Nothing)
+        record = Array(s, selType, Nothing, Nothing, partPath, cfg, Nothing, DxfOccurrenceKey(swComp))
         Set record(2) = selObj
         Set record(3) = swComp
         captured.Add record
@@ -2592,16 +2535,18 @@ NextSelection:
         partPath = CStr(record(4))
         cfg = CStr(record(5))
         If IsAssemblyPath(partPath) Then
-            key = LCase(partPath) & "@" & cfg
+            key = CStr(record(7))
             If scopes.Exists(key) Then
                 Set visibleParts = scopes(key)
             Else
-                Set visibleParts = BuildVisibleSubassemblyPartCandidates(swModel, partPath, cfg)
+                Set swComp = record(3)
+                Set visibleParts = BuildVisibleSubassemblyPartCandidates(swComp)
                 scopes.Add key, visibleParts
             End If
             Set record(6) = visibleParts
             TraceRun "selection-snapshot subassembly index=" & CStr(record(0)) & _
-                     " candidates=" & CStr(visibleParts.Count) & " path=" & DiagnosticLineValue(partPath)
+                     " occurrences=" & CStr(visibleParts.Count) & " instance=" & DiagnosticLineValue(key) & _
+                     " path=" & DiagnosticLineValue(partPath)
         End If
         result.Add record
     Next record
@@ -2620,8 +2565,11 @@ End Function
 
 Sub ProcessSelectedComponents(swModel As Object, selectedCandidates As Collection, _
                               dxfFolder As String, mode As Integer, _
-                              assemblyExportMethod As Integer, dictQty As Object, _
+                              assemblyExportMethod As Integer, _
                               dictDone As Object, dictOpened As Object)
+
+    Dim dictQty As Object
+    Set dictQty = BuildSelectedQtyDict(selectedCandidates)
 
     Dim dictSelectedAssemblyParts As Object
 
@@ -2671,7 +2619,7 @@ Sub ProcessSelectedComponents(swModel As Object, selectedCandidates As Collectio
 
             Dim assemblyKey As String
 
-            assemblyKey = LCase(partPath) & "@" & cfg
+            assemblyKey = CStr(selectedCandidate(7))
 
             If Not dictSelectedAssemblyKeys.Exists(assemblyKey) Then
                 dictSelectedAssemblyKeys.Add assemblyKey, True
@@ -2682,10 +2630,10 @@ Sub ProcessSelectedComponents(swModel As Object, selectedCandidates As Collectio
                 If mode = MODE_REGULAR And _
                    assemblyExportMethod = ASSEMBLY_EXPORT_CONTEXT Then
                     AddSelectedSubassemblyContext partPath, cfg, visibleParts, _
-                                                  dictSelectedAssemblyContexts
+                                                  dictSelectedAssemblyContexts, dictQty
                 Else
                     CollectSelectedSubassemblyParts partPath, cfg, visibleParts, _
-                                                    dictSelectedAssemblyParts
+                                                    dictSelectedAssemblyParts, dictQty
                 End If
             End If
 
@@ -2724,7 +2672,8 @@ Sub ProcessSelectedComponents(swModel As Object, selectedCandidates As Collectio
 
         Else
 
-            qty = 1
+            TraceRun "selected reject=no-eligible-quantity component=" & g_traceComponent
+            GoTo NextSel
 
         End If
 
@@ -2772,42 +2721,32 @@ End Sub
 
 ' Snapshot the original instances before opening a subassembly in its own window.
 ' Their display state may differ from the standalone subassembly display state.
-Function BuildVisibleSubassemblyPartCandidates(swModel As Object, assemblyPath As String, _
-                                                cfg As String) As Object
+Function BuildVisibleSubassemblyPartCandidates(ByVal selectedAssembly As Object) As Object
     Dim candidates As Object
     Set candidates = CreateObject("Scripting.Dictionary")
     Set BuildVisibleSubassemblyPartCandidates = candidates
-
-    Dim components As Variant
-    components = Empty
-    On Error Resume Next
-    components = swModel.GetComponents(False)
-    On Error GoTo 0
-    If IsEmpty(components) Then Exit Function
-
-    Dim i As Long
-    For i = 0 To UBound(components)
-        Dim instance As Object
-        Set instance = components(i)
-        If instance Is Nothing Then GoTo NextInstance
-        If IsComponentActuallySuppressedSafe(instance) Then GoTo NextInstance
-        If IsComponentHiddenSafe(instance) Then GoTo NextInstance
-        If ComponentHasExcludedAssemblyAncestor(instance, False, False) Then GoTo NextInstance
-        If StrComp(instance.GetPathName, assemblyPath, vbTextCompare) <> 0 Then GoTo NextInstance
-        If StrComp(instance.ReferencedConfiguration, cfg, vbTextCompare) <> 0 Then GoTo NextInstance
-        CollectEligibleSubassemblyChildren instance, 1, candidates
-NextInstance:
-    Next i
+    If selectedAssembly Is Nothing Then Err.Raise 5, "DXF quantity", "The selected subassembly is unavailable."
+    If IsComponentActuallySuppressedSafe(selectedAssembly) Or IsComponentHiddenSafe(selectedAssembly) Then Exit Function
+    If ComponentHasExcludedAssemblyAncestor(selectedAssembly, False, False) Then Exit Function
+    CollectEligibleSubassemblyChildren selectedAssembly, 0, candidates
 End Function
 
 Sub AddSelectedSubassemblyContext(assemblyPath As String, cfg As String, _
-                                  visibleParts As Object, dictContexts As Object)
+                                  visibleParts As Object, dictContexts As Object, selectedQty As Object)
     Dim contextKey As String
     contextKey = LCase(assemblyPath) & "@" & cfg
-    If dictContexts.Exists(contextKey) Then Exit Sub
-    Dim contextInfo As Variant
-    contextInfo = Array(assemblyPath, cfg, Nothing)
-    Set contextInfo(2) = visibleParts
+    Dim contextInfo As Variant, mergedParts As Object
+    If dictContexts.Exists(contextKey) Then
+        contextInfo = dictContexts(contextKey)
+        Set mergedParts = contextInfo(2)
+        MergeDxfOccurrences mergedParts, visibleParts
+        Exit Sub
+    End If
+    Set mergedParts = CreateObject("Scripting.Dictionary")
+    MergeDxfOccurrences mergedParts, visibleParts
+    contextInfo = Array(assemblyPath, cfg, Nothing, Nothing)
+    Set contextInfo(2) = mergedParts
+    Set contextInfo(3) = selectedQty
     dictContexts.Add contextKey, contextInfo
 End Sub
 
@@ -2833,7 +2772,7 @@ Sub ExportSelectedSubassembliesInContext(dictContexts As Object, dxfFolder As St
         ProcessSelectedSubassemblyContext CStr(contextInfo(0)), _
                                           CStr(contextInfo(1)), _
                                           visibleParts, _
-                                          dxfFolder, dictDone, dictOpened
+                                          dxfFolder, dictDone, dictOpened, contextInfo(3)
 
     Next contextKey
 
@@ -2841,7 +2780,7 @@ End Sub
 
 Sub ProcessSelectedSubassemblyContext(assemblyPath As String, cfg As String, _
                                       visibleParts As Object, dxfFolder As String, _
-                                      dictDone As Object, dictOpened As Object)
+                                      dictDone As Object, dictOpened As Object, selectedQty As Object)
     Dim originalActiveDoc As Object, swAssembly As Object, originalCfg As String
     Dim wasLoaded As Boolean, errs As Long, warns As Long, restoreOk As Boolean
     If Not IsAssemblyPath(assemblyPath) Or DxfStopRequested() Or g_stopBatchReason <> "" Then Exit Sub
@@ -2850,7 +2789,7 @@ Sub ProcessSelectedSubassemblyContext(assemblyPath As String, cfg As String, _
     Set swAssembly = swApp.GetOpenDocumentByName(assemblyPath)
     wasLoaded = Not swAssembly Is Nothing
     If swAssembly Is Nothing Then _
-        Set swAssembly = swApp.OpenDoc6(assemblyPath, swDocASSEMBLY, swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, cfg, errs, warns)
+        Set swAssembly = swApp.OpenDoc6(assemblyPath, swDocASSEMBLY, swOpenDocOptions_Silent, cfg, errs, warns)
     If swAssembly Is Nothing Then
         TraceRun "subassembly reject=open-failed path=" & DiagnosticLineValue(assemblyPath)
         GoTo CleanUp
@@ -2863,7 +2802,7 @@ Sub ProcessSelectedSubassemblyContext(assemblyPath As String, cfg As String, _
     If Not ActivateConfigurationChecked(swAssembly, cfg) Then GoTo CleanUp
     swAssembly.EditRebuild3
     Dim allowedScopes As Object
-    Set allowedScopes = NormalizeVisiblePartScopes(visibleParts)
+    Set allowedScopes = NormalizeVisiblePartScopes(visibleParts, selectedQty)
     ProcessAssemblyCandidateSnapshot swAssembly, dxfFolder, True, allowedScopes, dictDone, dictOpened
 CleanUp:
     On Error Resume Next
@@ -2893,16 +2832,17 @@ Failed:
 End Sub
 
 Sub CollectSelectedSubassemblyParts(assemblyPath As String, cfg As String, _
-                                     visibleParts As Object, dictCandidates As Object)
+                                     visibleParts As Object, dictCandidates As Object, selectedQty As Object)
     ' The original assembly snapshot is authoritative, not a reopened display state.
     Dim partKey As Variant, candidate As Variant, existing As Variant, scopedParts As Object
     If visibleParts Is Nothing Then Exit Sub
-    Set scopedParts = NormalizeVisiblePartScopes(visibleParts)
+    Set scopedParts = NormalizeVisiblePartScopes(visibleParts, selectedQty)
     For Each partKey In scopedParts.Keys
         candidate = scopedParts(partKey)
         If dictCandidates.Exists(partKey) Then
             existing = dictCandidates(partKey)
-            existing(2) = CLng(existing(2)) + CLng(candidate(2))
+            ' The shared total already includes the selected union, including overlaps.
+            existing(2) = CLng(candidate(2))
             If CStr(existing(3)) = "" Then existing(3) = candidate(3)
             dictCandidates(partKey) = existing
         Else
@@ -2913,97 +2853,33 @@ Sub CollectSelectedSubassemblyParts(assemblyPath As String, cfg As String, _
     Next partKey
 End Sub
 
-Sub CollectEligibleSubassemblyChildren(parentComp As Object, _
-                                       assemblyCopies As Long, _
+Sub CollectEligibleSubassemblyChildren(parentComp As Object, ByVal depth As Long, _
                                        dictCandidates As Object)
-
-    Dim children As Variant
-
-    children = Empty
-
-    On Error Resume Next
-
+    Dim children As Variant, i As Long, childComp As Object
+    Dim childPath As String, childCfg As String, candidate As Variant, key As String
+    If depth > 128 Then Err.Raise 5, "DXF quantity", "Selected subassembly nesting is incomplete or cyclic."
+    ' Read this occurrence's children, never all matching subassembly files.
     children = parentComp.GetChildren
-
-    On Error GoTo 0
-
     If IsEmpty(children) Then Exit Sub
-
-    Dim i As Long
-
-    For i = 0 To UBound(children)
-
-        Dim childComp As Object
-
+    If Not IsArray(children) Then Err.Raise 5, "DXF quantity", "Could not read selected subassembly children."
+    For i = LBound(children) To UBound(children)
         Set childComp = children(i)
-
-        If childComp Is Nothing Then GoTo NextChild
-
-        If IsComponentActuallySuppressedSafe(childComp) Then
-
-            Debug.Print "      Suppressed component, skip: " & childComp.Name2
-
-            GoTo NextChild
-
-        End If
-
-        If IsComponentHiddenSafe(childComp) Then
-
-            Debug.Print "      Hidden component, skip: " & childComp.Name2
-
-            GoTo NextChild
-
-        End If
-
-        Dim childPath As String
-
-        childPath = childComp.GetPathName
-
-        If childPath = "" Then GoTo NextChild
-
+        If childComp Is Nothing Then Err.Raise 5, "DXF quantity", "A selected subassembly child is unavailable."
+        If IsComponentActuallySuppressedSafe(childComp) Or IsComponentHiddenSafe(childComp) Then GoTo NextChild
+        childPath = CStr(childComp.GetPathName)
+        If Not IsAssemblyPath(childPath) And Not IsPartPath(childPath) Then GoTo NextChild
+        childCfg = CStr(childComp.ReferencedConfiguration)
+        If childCfg = "" Then Err.Raise 5, "DXF quantity", "A selected child configuration is unavailable."
         If IsAssemblyPath(childPath) Then
-
-            CollectEligibleSubassemblyChildren childComp, assemblyCopies, _
-                                               dictCandidates
-
-            GoTo NextChild
-
-        End If
-
-        If Not IsPartPath(childPath) Then GoTo NextChild
-
-        Dim childCfg As String
-
-        childCfg = childComp.ReferencedConfiguration
-
-        Dim fullKey As String
-
-        fullKey = DxfCandidateScopeKey(childPath, childCfg, childComp, Nothing, True)
-
-        Dim candidate As Variant
-
-        If dictCandidates.Exists(fullKey) Then
-
-            candidate = dictCandidates(fullKey)
-
-            candidate(2) = CLng(candidate(2)) + assemblyCopies
-            If CStr(candidate(3)) = "" Then candidate(3) = ComponentImportHint(childComp)
-
-            dictCandidates(fullKey) = candidate
-
+            CollectEligibleSubassemblyChildren childComp, depth + 1, dictCandidates
         Else
-
-            candidate = Array(childPath, childCfg, assemblyCopies, ComponentImportHint(childComp), Nothing)
+            key = DxfOccurrenceKey(childComp)
+            candidate = Array(childPath, childCfg, 1&, ComponentImportHint(childComp), Nothing)
             Set candidate(4) = childComp
-
-            dictCandidates.Add fullKey, candidate
-
+            AddDxfOccurrence dictCandidates, key, candidate
         End If
-
 NextChild:
-
     Next i
-
 End Sub
 
 Sub ExportSelectedSubassemblyParts(swModel As Object, dictCandidates As Object, dxfFolder As String, _
@@ -3317,7 +3193,7 @@ Function OpenPartForExport(partPath As String, dictOpened As Object, _
 
     Dim p As Object
 
-    Set p = swApp.OpenDoc6(partPath, swDocPART, swOpenDocOptions_Silent Or swOpenDocOptions_ReadOnly, "", errs, warns)
+    Set p = swApp.OpenDoc6(partPath, swDocPART, 1, "", errs, warns)
 
     If p Is Nothing Then
 
@@ -3701,7 +3577,8 @@ Function ExportOnePartInAssemblyContext(swAssembly As Object, swComp As Object, 
     finalPath = outPath
     outPath = DxfExportWorkPath(finalPath)
 
-    ok = ExportAssemblyContextThinSolidDxf(swAssembly, swComp, preferredFace, outPath)
+    ok = ExportAssemblyContextThinSolidDxf(swAssembly, swComp, _
+                                           preferredFace, outPath)
 
     If ok Then
 
@@ -8864,141 +8741,313 @@ Function GetBoundingThickness(swPart As Object) As Double
 End Function
 
 ' Reads a plane face's normal + a point on the plane via Surface.PlaneParams.
+' PlaneParams returns (rootX, rootY, rootZ, normalX, normalY, normalZ) in
+' some SW versions and (normalX, normalY, normalZ, rootX, rootY, rootZ) in
+' others. We normalize the normal and pick the layout whose normal length
+' is closer to 1.
 Function TryGetPlaneNormalAndPoint(swFace As Object, outNorm() As Double, _
                                    outPoint() As Double) As Boolean
+
     TryGetPlaneNormalAndPoint = False
+
     If swFace Is Nothing Then Exit Function
+
     Dim surf As Object
+
     On Error Resume Next
+
     Set surf = swFace.GetSurface
+
     On Error GoTo 0
+
     If surf Is Nothing Then Exit Function
+
     If Not surf.IsPlane Then Exit Function
+
     Dim params As Variant
+
     params = Empty
+
     On Error Resume Next
+
     params = surf.PlaneParams
+
     On Error GoTo 0
+
     If IsEmpty(params) Then Exit Function
+
     If UBound(params) < 5 Then Exit Function
+
+
+
     Dim aLen As Double
+
     aLen = Sqr(params(0) * params(0) + params(1) * params(1) + params(2) * params(2))
+
     Dim bLen As Double
+
     bLen = Sqr(params(3) * params(3) + params(4) * params(4) + params(5) * params(5))
+
+
+
     If Abs(aLen - 1#) <= Abs(bLen - 1#) Then
+
         outNorm(0) = params(0)
+
         outNorm(1) = params(1)
+
         outNorm(2) = params(2)
+
         outPoint(0) = params(3)
+
         outPoint(1) = params(4)
+
         outPoint(2) = params(5)
+
     Else
+
         outNorm(0) = params(3)
+
         outNorm(1) = params(4)
+
         outNorm(2) = params(5)
+
         outPoint(0) = params(0)
+
         outPoint(1) = params(1)
+
         outPoint(2) = params(2)
+
     End If
+
+
+
     Dim nLen As Double
+
     nLen = Sqr(outNorm(0) * outNorm(0) + outNorm(1) * outNorm(1) + outNorm(2) * outNorm(2))
+
     If nLen <= 0.000001 Then Exit Function
+
     outNorm(0) = outNorm(0) / nLen
+
     outNorm(1) = outNorm(1) / nLen
+
     outNorm(2) = outNorm(2) / nLen
+
+
+
+    ' Face2.FaceInSurfaceSense returns True when the face's outward normal is
+    ' opposite to the surface normal. Flip so we always get the face normal.
     Dim flip As Boolean
+
     flip = False
+
     On Error Resume Next
+
     flip = CBool(swFace.FaceInSurfaceSense)
+
     On Error GoTo 0
+
     If flip Then
+
         outNorm(0) = -outNorm(0)
+
         outNorm(1) = -outNorm(1)
+
         outNorm(2) = -outNorm(2)
+
     End If
+
+
+
     TryGetPlaneNormalAndPoint = True
+
 End Function
 
+' Perpendicular distance from a point to the plane defined by (planeNorm, planePoint).
 Function SignedPlaneDistance(planeNorm() As Double, planePoint() As Double, _
                              ByVal qx As Double, ByVal qy As Double, ByVal qz As Double) As Double
+
     SignedPlaneDistance = (qx - planePoint(0)) * planeNorm(0) _
                         + (qy - planePoint(1)) * planeNorm(1) _
                         + (qz - planePoint(2)) * planeNorm(2)
+
 End Function
 
+' Iterates all planar faces of a part. Returns the perpendicular span of the
+' part along the largest-planar-face's normal. This is the true slab
+' thickness of a thin solid, independent of how the part is oriented in
+' world coords. Returns 0 if no usable planar face is found.
 Function GetThicknessAlongLargestPlaneNormal(swPart As Object) As Double
+
     GetThicknessAlongLargestPlaneNormal = 0
+
     Dim faceMax As Object
+
     Set faceMax = FindLargestPlanarFace(swPart)
+
     If faceMax Is Nothing Then Exit Function
+
     Dim planeN(2) As Double
+
     Dim planeP(2) As Double
+
     If Not TryGetPlaneNormalAndPoint(faceMax, planeN, planeP) Then Exit Function
+
+
+
     Dim bodies As Variant
+
     bodies = GetPartBodies(swPart)
+
     If IsEmpty(bodies) Then Exit Function
+
+
+
     Dim minProj As Double
+
     Dim maxProj As Double
+
     Dim seen As Boolean
+
     seen = False
+
     minProj = 0
+
     maxProj = 0
+
+
+
     Dim bi As Long
+
     For bi = 0 To UBound(bodies)
+
         Dim b As Object
+
         Set b = bodies(bi)
+
         If b Is Nothing Then GoTo NextBody
+
+
+
         Dim faces As Variant
+
         faces = Empty
+
         On Error Resume Next
+
         faces = b.GetFaces
+
         On Error GoTo 0
+
         If IsEmpty(faces) Then GoTo NextBody
+
+
+
         Dim fi As Long
+
         For fi = 0 To UBound(faces)
+
             Dim f As Object
+
             Set f = faces(fi)
+
             If f Is Nothing Then GoTo NextFace
+
+
+
             Dim faceBox As Variant
+
             faceBox = Empty
+
             On Error Resume Next
+
             faceBox = f.GetBox
+
             On Error GoTo 0
+
             If IsEmpty(faceBox) Then GoTo NextFace
+
             If UBound(faceBox) < 5 Then GoTo NextFace
+
+
+
+            ' Project all 8 face-box corners onto the plane normal.
             Dim cx As Long
+
             For cx = 0 To 1
+
                 Dim cy As Long
+
                 For cy = 0 To 1
+
                     Dim cz As Long
+
                     For cz = 0 To 1
+
                         Dim px As Double
+
                         Dim py As Double
+
                         Dim pz As Double
+
                         px = faceBox(IIf(cx = 0, 0, 3))
+
                         py = faceBox(IIf(cy = 0, 1, 4))
+
                         pz = faceBox(IIf(cz = 0, 2, 5))
+
                         Dim sd As Double
+
                         sd = SignedPlaneDistance(planeN, planeP, px, py, pz)
+
                         If Not seen Then
+
                             minProj = sd
+
                             maxProj = sd
+
                             seen = True
+
                         Else
+
                             If sd < minProj Then minProj = sd
+
                             If sd > maxProj Then maxProj = sd
+
                         End If
+
                     Next cz
+
                 Next cy
+
             Next cx
+
 NextFace:
+
         Next fi
+
 NextBody:
+
     Next bi
+
+
+
     If Not seen Then Exit Function
+
     GetThicknessAlongLargestPlaneNormal = (maxProj - minProj) * 1000
+
 End Function
 
+' Public: pick the most reliable thickness for a thin solid part.
+' Priority chain:
+'   1) Exact body extents along the largest planar face normal, including
+'      curved and closed-edge geometry that vertex sampling can miss.
+'   2) Face-bbox projection (older method; can over-estimate by ~1 mm
+'      for chamfered/curved parts because face-bboxes are axis-aligned).
+'   3) World bounding box min-axis (last resort; orientation-dependent
+'      and was the original source of the thickness-classification bug for axis-aligned
+'      parts with features that extruded slightly past the main plate).
 Function GetThinSolidThickness(swPart As Object) As Double
     Dim thickness As Double
     thickness = GetThicknessViaBodyExtents(swPart)
@@ -9289,12 +9338,16 @@ Function FormatThickness(v As Double) As String
     End If
 
     ' Round to nearest whole millimeter, half goes up.
+    '   12.0 -> 12   12.4 -> 12   12.5 -> 13   12.9 -> 13
+
     Dim n As Long
+
     If v <= 0 Then
         n = 0
     Else
         n = Int(v + 0.5)
     End If
+
     FormatThickness = CStr(n)
 
 End Function

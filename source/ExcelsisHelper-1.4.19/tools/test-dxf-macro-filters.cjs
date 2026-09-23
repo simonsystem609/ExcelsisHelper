@@ -31,7 +31,7 @@ function toDotNet(source) {
     .replace(/^([ \t]*)Err\.Raise (.+)$/gm, "$1Err.Raise($2)")
     .replace(/^([ \t]*)(BeginDxfCandidate|FinishDxfCandidate|RememberOriginalConfiguration|ResolveSelectedPartIfLightweight|RebuildDocumentIfNeeded|ActivateModelDocument|AddSelectedSubassemblyContext|CollectSelectedSubassemblyParts|ExportSelectedSubassembliesInContext|ExportSelectedSubassemblyParts|PreserveCandidateDocument) (.+)$/gm, "$1$2($3)")
     .replace(/^([ \t]*)TraceRun (.+)$/gm, "$1TraceRun($2)")
-    .replace(/^([ \t]*)(\w+\.(?:Add|Remove)|CollectEligibleSubassemblyChildren) (.+)$/gm, "$1$2($3)")
+    .replace(/^([ \t]*)(\w+\.(?:Add|Remove)|CollectEligibleSubassemblyChildren|MergeDxfOccurrences|AddDxfOccurrence) (.+)$/gm, "$1$2($3)")
     .replace(/^([ \t]*)(\w+\.ForceRebuild3) (.+)$/gm, "$1$2($3)")
     .replace(/\bSqr\(/g, "Math.Sqrt(")
     .replace(/\b(Abs|Round)\(/g, "Math.$1(")
@@ -53,7 +53,7 @@ const functions = [
   "IsSheetMetal", "IsSheetMetalSafe", "PartHasSheetMetalBody", "GetSheetMetalThickness",
   "IsComponentHiddenSafe", "ComponentHasExcludedAssemblyAncestor", "GetComponentSuppressionStateSafe",
   "IsComponentActuallySuppressedSafe", "IsComponentLightweightSafe", "IsPartPath", "IsAssemblyPath",
-  "BuildQtyDict", "BuildAssemblyContextQtyDict", "CollectEligibleSubassemblyChildren",
+  "DxfOccurrenceKey", "AddDxfOccurrence", "MergeDxfOccurrences", "BuildSelectedQtyDict", "CollectEligibleSubassemblyChildren",
   "BuildVisibleSubassemblyPartCandidates",
   "SnapshotAssemblyPartInstances", "ClaimDxfOutput",
   "ActivateConfigurationChecked", "RememberOriginalConfiguration", "ProcessAssemblyCandidateSnapshot", "ExportAssemblyCandidate",
@@ -90,14 +90,16 @@ for (const filename of ["DXF_v16.swb", "DXF_v16_ROfriendy.swb"]) {
   assert.match(procedure(source, "AskDxfRunOptions"), /If Not AskImportedFilter\(\) Then Exit Function/);
   assert.match(procedure(source, "AskMaterial"), /ConfiguredDefaultMaterial\(\)/);
   assert.doesNotMatch(procedure(source, "AskMaterial"), /\.Popup\b/);
-  assert.match(procedure(source, "BuildQtyDict"), /ComponentHasExcludedAssemblyAncestor\(c, False, False\)/);
+  assert.match(procedure(source, "BuildSelectedQtyDict"), /ComponentHasExcludedAssemblyAncestor\(swComp, False, False\)/);
+  assert.doesNotMatch(source, /Function BuildQtyDict|Function BuildAssemblyContextQtyDict/);
+  assert.doesNotMatch(procedure(source, "BuildVisibleSubassemblyPartCandidates"), /GetComponents|assemblyPath|ReferencedConfiguration/);
   assert.match(procedure(source, "ExportAssemblyCandidate"), /ComponentHasExcludedAssemblyAncestor\(swComp, False, False\)/);
   for (const route of ["ProcessSelectedComponents", "ExportAssemblyCandidate"]) {
     assert.match(procedure(source, route), /IsComponentHiddenSafe\(swComp\)/, route);
     assert.match(procedure(source, route), /ComponentHasExcludedAssemblyAncestor\(swComp,/, route);
   }
   assert.match(procedure(source, "ProcessSelectedSubassemblyContext"), /ProcessAssemblyCandidateSnapshot swAssembly, dxfFolder, True, allowedScopes/);
-  assert.match(procedure(source, "CollectSelectedSubassemblyParts"), /NormalizeVisiblePartScopes\(visibleParts\)/);
+  assert.match(procedure(source, "CollectSelectedSubassemblyParts"), /NormalizeVisiblePartScopes\(visibleParts, selectedQty\)/);
   assert.match(procedure(source, "ProcessAssemblyCandidateSnapshot"), /If Not allowedParts.Exists\(key\) Then/);
   assert.match(procedure(source, "ProcessSelectedComponents"), /Dim exported As Boolean\s+exported = False/);
   assert.doesNotMatch(source, /SetSuppression2\s+[02],\s*2,/);
@@ -254,6 +256,79 @@ Function SlabFace(area As Double, nz As Double, z As Double) As TestFace
   face.Surface.PlaneParams = New Double() {0, 0, nz, 0, 0, z}
   Return face
 End Function
+Sub AssertSelectedSet(asm As TestAssembly, items As Object(), expected As TestComponent(), label As String)
+  Dim frozen = SnapshotSelectedComponents(asm, New TestSelection With {.Items = items}, items.Length)
+  Check(frozen IsNot Nothing, label & " captures complete selection")
+  Dim actual = BuildSelectedQtyDict(frozen), wanted As Object = CreateObject("Scripting.Dictionary")
+  For Each comp In expected
+    Dim key = DxfCandidateScopeKey(comp.FilePath, comp.ReferencedConfiguration, comp, Nothing)
+    If wanted.Exists(key) Then wanted(key) = CLng(wanted(key)) + 1 Else wanted.Add(key, 1)
+  Next
+  Check(actual.Count = wanted.Count, label & " exact output scopes")
+  For Each key As String In wanted.Keys
+    Check(actual.Exists(key) AndAlso CLng(actual(key)) = CLng(wanted(key)), label & " exact occurrence quantity: " & key)
+  Next
+End Sub
+Sub RunQuantityRegressions()
+  Dim asm As New TestAssembly With {.FailComponents = True}
+  Dim one As New TestComponent With {.FilePath = "C:\\Parts\\unit.SLDASM", .Name2 = "unit-1"}
+  Dim two As New TestComponent With {.FilePath = one.FilePath, .Name2 = "unit-2"}
+  Dim nestedOne As New TestComponent With {.FilePath = "C:\\Parts\\nested.SLDASM", .Name2 = "unit-1/nested-1", .Parent = one}
+  Dim nestedTwo As New TestComponent With {.FilePath = nestedOne.FilePath, .Name2 = "unit-2/nested-1", .Parent = two}
+  Dim a1 As New TestComponent With {.Name2 = "unit-1/plate-1", .ReferencedConfiguration = "A", .Parent = one}
+  Dim a2 As New TestComponent With {.Name2 = "unit-1/plate-2", .ReferencedConfiguration = "A", .Parent = one}
+  Dim b1 As New TestComponent With {.Name2 = "unit-1/plate-3", .ReferencedConfiguration = "B", .Parent = one}
+  Dim n1 As New TestComponent With {.Name2 = "unit-1/nested-1/plate-1", .ReferencedConfiguration = "A", .Parent = nestedOne}
+  Dim a3 As New TestComponent With {.Name2 = "unit-2/plate-1", .ReferencedConfiguration = "A", .Parent = two}
+  Dim a4 As New TestComponent With {.Name2 = "unit-2/plate-2", .ReferencedConfiguration = "A", .Parent = two}
+  Dim b2 As New TestComponent With {.Name2 = "unit-2/plate-3", .ReferencedConfiguration = "B", .Parent = two}
+  Dim n2 As New TestComponent With {.Name2 = "unit-2/nested-1/plate-1", .ReferencedConfiguration = "A", .Parent = nestedTwo}
+  Dim direct As New TestComponent With {.Name2 = "plate-1", .ReferencedConfiguration = "A"}
+  Dim hidden As New TestComponent With {.Parent = one, .VisibleValue = 0}
+  Dim suppressed As New TestComponent With {.Parent = one, .Suppression = 0}
+  Dim face As New TestFace(1, True) With {.Owner = a1}
+  Dim secondFace As New TestFace(2, True) With {.Owner = a1}
+  nestedOne.Children = New Object() {n1} : nestedTwo.Children = New Object() {n2}
+  one.Children = New Object() {a1, a2, b1, nestedOne, hidden, suppressed}
+  two.Children = New Object() {a3, a4, b2, nestedTwo}
+  asm.Components = New Object() {one, two, a1, a2, b1, n1, a3, a4, b2, n2, direct}
+  For Each grouped As Boolean In New Boolean() {False, True}
+    g_assemblyFolders = grouped
+    AssertSelectedSet(asm, New Object() {one}, New TestComponent() {a1, a2, b1, n1}, "one of repeated subassemblies")
+    AssertSelectedSet(asm, New Object() {one, two}, New TestComponent() {a1, a2, b1, n1, a3, a4, b2, n2}, "two selected occurrences add up")
+    AssertSelectedSet(asm, New Object() {one, one, a1, face, nestedOne, n1}, New TestComponent() {a1, a2, b1, n1}, "overlapping parent child and face selection counts once")
+    AssertSelectedSet(asm, New Object() {nestedOne, n1, face, one}, New TestComponent() {a1, a2, b1, n1}, "overlap order independent")
+    AssertSelectedSet(asm, New Object() {face, secondFace, a1}, New TestComponent() {a1}, "multiple faces from one occurrence count once")
+    AssertSelectedSet(asm, New Object() {a1, a3}, New TestComponent() {a1, a3}, "direct parts from repeated parents")
+    AssertSelectedSet(asm, New Object() {one, direct}, New TestComponent() {a1, a2, b1, n1, direct}, "mixed selected root part and subassembly")
+    AssertSelectedSet(asm, New Object() {direct}, New TestComponent() {direct}, "single selected part excludes unselected copies")
+    two.VisibleValue = 0
+    AssertSelectedSet(asm, New Object() {one, two, a3}, New TestComponent() {a1, a2, b1, n1}, "hidden parent excludes selected descendants")
+    two.VisibleValue = 1
+    a2.Suppression = 1
+    AssertSelectedSet(asm, New Object() {one}, New TestComponent() {a1, a2, b1, n1}, "lightweight child still counted")
+    a2.Suppression = 3
+  Next
+  g_assemblyFolders = False
+  one.FailChildren = True
+  Check(SnapshotSelectedComponents(asm, New TestSelection With {.Items = New Object() {direct, one}}, 2) Is Nothing, "failed child read rejects whole selection before export")
+  one.FailChildren = False
+  n1.ReferencedConfiguration = ""
+  Check(SnapshotSelectedComponents(asm, New TestSelection With {.Items = New Object() {one}}, 1) Is Nothing, "unknown nested configuration cannot undercount silently")
+  n1.ReferencedConfiguration = "A"
+  one.Name2 = ""
+  Check(SnapshotSelectedComponents(asm, New TestSelection With {.Items = New Object() {one}}, 1) Is Nothing, "unknown occurrence identity cannot widen selection")
+  one.Name2 = "unit-1"
+  Dim frozen = SnapshotSelectedComponents(asm, New TestSelection With {.Items = New Object() {one, direct}}, 2)
+  a2.VisibleValue = 0
+  Dim totals = BuildSelectedQtyDict(frozen)
+  Check(CLng(totals("c:\\parts\\native.sldprt@A")) = 3, "hidden after capture excluded before totals freeze")
+  a2.VisibleValue = 1
+  Dim plate = MakePart(3, 100, 200)
+  plate.Bodies = New Object() {New TestBody(3), New TestBody(3)}
+  totals = BuildSelectedQtyDict(frozen)
+  Check(GetExportPieceCount(plate, CLng(totals("c:\\parts\\native.sldprt@A"))) = 8, "body multiplier applied once to selected occurrence total")
+End Sub
 Sub Main()
   Check(FormatThickness(0.3) = "0.3" And FormatThickness(0.75) = "0.75", "fractional sheet thickness must not become LV0 or LV1")
   Check(FormatThickness(12.4) = "12" And FormatThickness(12.5) = "13" And FormatThickness(0) = "0", "existing whole-mm half-up naming preserved")
@@ -300,22 +375,20 @@ Sub Main()
   cycle.Parent = cycle
   Check(ComponentHasExcludedAssemblyAncestor(cycle, False, False), "bounded ancestor cycle fails closed")
   Dim asm As New TestAssembly With {.Components = New Object() {shown, hidden, parent, nested}}
-  Dim counts As Object = BuildQtyDict(asm)
-  Check(CInt(counts("c:\\parts\\native.sldprt@Default")) = 1, "hidden occurrences excluded from regular quantities")
-  counts = BuildAssemblyContextQtyDict(asm)
-  Check(CInt(counts("c:\\parts\\native.sldprt@Default")) = 1, "hidden occurrences excluded from context quantities")
-  Dim scoped As Object = BuildVisibleSubassemblyPartCandidates(asm, parent.FilePath, "Default")
+  Dim counts As Object = BuildSelectedQtyDict(SnapshotSelectedComponents(asm, New TestSelection With {.Items = asm.Components}, 4))
+  Check(CInt(counts("c:\\parts\\native.sldprt@Default")) = 1, "hidden occurrences and hidden ancestors excluded from selected quantities")
+  Dim scoped As Object = BuildVisibleSubassemblyPartCandidates(parent)
   Check(scoped.Count = 0, "hidden subassembly has no allowed exports")
   parent.VisibleValue = 1
-  scoped = BuildVisibleSubassemblyPartCandidates(asm, parent.FilePath, "Default")
+  scoped = BuildVisibleSubassemblyPartCandidates(parent)
   Check(scoped.Count = 1, "visible nested part retained")
   nested.VisibleValue = 0
-  scoped = BuildVisibleSubassemblyPartCandidates(asm, parent.FilePath, "Default")
+  scoped = BuildVisibleSubassemblyPartCandidates(parent)
   Check(scoped.Count = 0, "snapshot excludes hidden child even if reopening later shows it")
   Dim childBranch As New TestComponent With {.VisibleValue = 0, .FilePath = "C:\\Parts\\nested.SLDASM", .Parent = parent}
   childBranch.Children = New Object() {shown}
   parent.Children = New Object() {childBranch}
-  scoped = BuildVisibleSubassemblyPartCandidates(asm, parent.FilePath, "Default")
+  scoped = BuildVisibleSubassemblyPartCandidates(parent)
   Check(scoped.Count = 0, "hidden nested subtree is never traversed")
   Dim plate = MakePart(3, 100, 200)
   Check(IsThinPlateLike(plate), "ordinary plate")
@@ -468,9 +541,8 @@ Sub Main()
   a.ReferencedConfiguration = "A" : asm.Components = New Object() {a, b}
   done.RemoveAll() : exportedConfigs.Clear()
   liveSelection = New TestSelection With {.Items = New Object() {a, b}}
-  counts = BuildQtyDict(asm)
   Dim selected = SnapshotSelectedComponents(asm, liveSelection, 2)
-  ProcessSelectedComponents(asm, selected, "C:\\dxf\\", MODE_REGULAR, 1, counts, done, opened)
+  ProcessSelectedComponents(asm, selected, "C:\\dxf\\", MODE_REGULAR, 1, done, opened)
   Check(done.Count = 2 And String.Join(",", exportedConfigs) = "A:1,B:1", "selected batch survives live selection clearing during first open")
   For Each route As Integer In New Integer() {1, 2, 3}
     Dim c As New TestComponent With {.ReferencedConfiguration = "C", .FilePath = "C:\\Parts\\face.SLDPRT"}
@@ -481,7 +553,6 @@ Sub Main()
     subPart.Parent = subAssembly : subHidden.Parent = subAssembly
     asm.Components = New Object() {a, b, c, hidden, subAssembly, subPart, subHidden}
     liveSelection = New TestSelection With {.Items = New Object() {a, b, a, hidden, face, subAssembly, New Object()}}
-    counts = BuildQtyDict(asm)
     selected = SnapshotSelectedComponents(asm, liveSelection, 7)
     Check(selected IsNot Nothing AndAlso selected.Count = 5, "all valid selected parts, faces and subassemblies captured; hidden/unsupported excluded")
     Dim readCount = selectionReads
@@ -489,7 +560,7 @@ Sub Main()
     done.RemoveAll() : exportedConfigs.Clear() : traces.Clear() : receivedFace = Nothing
     Dim selectedMode As Integer = If(route = 3, MODE_PRECUT, MODE_REGULAR)
     Dim method As Integer = If(route = 2, ASSEMBLY_EXPORT_CONTEXT, 1)
-    ProcessSelectedComponents(asm, selected, "C:\\dxf\\", selectedMode, method, counts, done, opened)
+    ProcessSelectedComponents(asm, selected, "C:\\dxf\\", selectedMode, method, done, opened)
     Check(done.Count = 3 And String.Join(",", exportedConfigs) = "A:1,B:1,C:1", "mixed selected queue exports each part/configuration once in every mode")
     Check(selectionReads = readCount, "export loop never rereads live selection")
     Check(traces.Contains("selected-queue complete captured=5 visited=5"), "queue completion accounts for every captured selection")
@@ -497,7 +568,7 @@ Sub Main()
       Check(receivedFace Is face, "assembly face override survives prior exports clearing selection")
       Check(selectedSubassemblyContexts.Count = 1, "context subassembly retained after live selection cleared")
       Dim contextInfo As Object = selectedSubassemblyContexts("c:\\parts\\selected.sldasm@Default")
-      scoped = NormalizeVisiblePartScopes(contextInfo(2))
+      scoped = NormalizeVisiblePartScopes(contextInfo(2), contextInfo(3))
     Else
       scoped = selectedSubassemblyParts
     End If
@@ -514,9 +585,10 @@ Sub Main()
   selected = SnapshotSelectedComponents(asm, liveSelection, 2)
   a.VisibleValue = 0
   done.RemoveAll() : exportedConfigs.Clear()
-  ProcessSelectedComponents(asm, selected, "C:\\dxf\\", MODE_REGULAR, 1, counts, done, opened)
+  ProcessSelectedComponents(asm, selected, "C:\\dxf\\", MODE_REGULAR, 1, done, opened)
   Check(done.Count = 1 And String.Join(",", exportedConfigs) = "B:1", "component hidden after capture remains excluded")
   a.VisibleValue = 1
+  RunQuantityRegressions()
   Console.WriteLine("DXF geometry, thresholds, import scopes, Toolbox, quantities and selection cases passed.")
 End Sub
 End Module
@@ -547,7 +619,9 @@ Class TestSelection
 End Class
 Class TestAssembly
   Public Components As Object()
+  Public FailComponents As Boolean
   Function GetComponents(top As Boolean) As Object
+    If FailComponents Then Throw New Exception("selection must not enumerate all matching assembly instances")
     Return Components
   End Function
 End Class
@@ -560,7 +634,14 @@ Class TestComponent
   Public FilePath As String = "C:\\Parts\\native.SLDPRT"
   Public ReferencedConfiguration As String = "Default"
   Public ImportedPath As String = ""
-  Public Name2 As String = "test instance"
+  Private Shared nextIdentity As Integer
+  Public Name2 As String
+  Public FailChildren As Boolean
+  Public Suppression As Integer = 3
+  Sub New()
+    nextIdentity += 1
+    Name2 = "instance-" & CStr(nextIdentity)
+  End Sub
   Public Bodies As Object(), BodyInfo As Object
   Function GetBodies3(kind As Integer, ByRef info As Object) As Object
     info = BodyInfo
@@ -573,7 +654,7 @@ Class TestComponent
     End Get
   End Property
   Function GetSuppression2() As Integer
-    Return 3
+    Return Suppression
   End Function
   Function GetParent() As Object
     If FailParent Then Throw New Exception("simulated parent COM failure")
@@ -586,6 +667,7 @@ Class TestComponent
     Return ImportedPath
   End Function
   Function GetChildren() As Object
+    If FailChildren Then Throw New Exception("selected subtree unavailable")
     Return Children
   End Function
 End Class

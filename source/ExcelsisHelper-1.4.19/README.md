@@ -1,4 +1,4 @@
-# Excelsis Helper 1.4.18
+# Excelsis Helper 1.4.19
 
 SOLIDWORKS workflow helper for recent documents, document search, macro running,
 work logging, CAM tools, local G-code analysis and embedded thumbnail previews.
@@ -11,8 +11,15 @@ Complete, preset-free source and build-ready macro artifacts.
 Do not reapply earlier separate macro patches to this version.
 The installer includes all nine current compiled macros and the app changes.
 
-Version 1.4.18 integrates the DXF macro revision
-`2026-09-20-flat-slab-ui-close-1` with the preserved 1.4.17 application baseline.
+Version 1.4.19 integrates the DXF macro revision
+`2026-09-23-selected-quantities-1` with the preserved 1.4.18 application baseline.
+Selected-subassembly exports count selected component occurrences, not every
+matching copy in the root assembly. Overlapping selections are deduplicated;
+regular, assembly-context and precut routes use the same selected totals.
+Uncertain occurrence identity or failed child/configuration reads stop an
+incomplete selected export. Full-assembly behavior is unchanged.
+
+Version 1.4.18 previously added the following DXF corrections:
 Both DXF variants reject confirmed bent non-sheet-metal bodies outside their
 material-thickness band, retain fractional thickness below 1 mm in filenames,
 and support checked Unicode/long-path output delivery. Macro-owned unsaved

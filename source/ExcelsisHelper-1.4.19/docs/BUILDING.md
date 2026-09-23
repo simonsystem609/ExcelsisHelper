@@ -10,8 +10,10 @@
 - EJS 6.0.1, pinned as a build-only override
 - fast-uri 3.1.7, xmldom 0.8.15, js-yaml 4.3.2
 
-This 1.4.18 source integrates the DXF macro revision
-`2026-09-20-flat-slab-ui-close-1` into the preserved 1.4.17 application baseline.
+This 1.4.19 source integrates the DXF macro revision
+`2026-09-23-selected-quantities-1` into the preserved 1.4.18 application baseline.
+Selected exports now count the union of selected occurrences; the previous
+flat/bent, export-folder and cleanup corrections remain included.
 It retains configurable macro shortcuts and the DXF
 preflight, incremental-export, selection and cleanup fixes, together with the
 previous packaging/export-folder and Radius patches. Repeat packaged-runtime,
@@ -81,8 +83,8 @@ unchanged. SWPs are scanned as Latin-1 and at both UTF-16 byte alignments.
 Do not launch the application merely to inspect a package. The build creates
 one universal, preset-free installer:
 
-- dist\Excelsis Helper-Setup-1.4.18.exe
-- dist\Excelsis Helper-Setup-1.4.18.exe.blockmap
+- dist\Excelsis Helper-Setup-1.4.19.exe
+- dist\Excelsis Helper-Setup-1.4.19.exe.blockmap
 - dist\win-unpacked\
 
 An optional `ExcelsisHelper-settings.json` beside the setup EXE uses the same
@@ -93,8 +95,8 @@ sidecar is never embedded in the setup EXE.
 ## Non-launching verification
 
 ~~~powershell
-Get-FileHash -Algorithm SHA256 '.\dist\Excelsis Helper-Setup-1.4.18.exe'
-Get-AuthenticodeSignature '.\dist\Excelsis Helper-Setup-1.4.18.exe'
+Get-FileHash -Algorithm SHA256 '.\dist\Excelsis Helper-Setup-1.4.19.exe'
+Get-AuthenticodeSignature '.\dist\Excelsis Helper-Setup-1.4.19.exe'
 node -e "import('@electron/asar').then(a => console.log(JSON.parse(a.extractFile('dist/win-unpacked/resources/app.asar','package.json')).version))"
 node tools\audit-packaged-runtime.cjs "dist\win-unpacked\Excelsis Helper.exe"
 ~~~

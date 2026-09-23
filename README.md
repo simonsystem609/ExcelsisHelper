@@ -1,6 +1,6 @@
 # Excelsis Helper
 
-Excelsis Helper 1.4.18 is an open-source Windows workflow companion
+Excelsis Helper 1.4.19 is an open-source Windows workflow companion
 for SOLIDWORKS. It provides recent-document access, document search,
 read-only embedded/thumbnail preview extraction, SWP macro launching,
 AutoRadius, assembly backup, PDF drawing export, Work Logger, local machining
@@ -8,11 +8,11 @@ guidance, and MPF analysis.
 
 ## Download
 
-- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.18/ExcelsisHelper-1.4.18-Setup.exe)
-- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.18)
-- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.18/ExcelsisHelper-1.4.18-source.zip)
+- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.19/ExcelsisHelper-1.4.19-Setup.exe)
+- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.19)
+- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.19/ExcelsisHelper-1.4.19-source.zip)
 - [SHA-256 checksums](SHA256SUMS.txt)
-- [Licensing and security audit](AUDIT-1.4.18.md)
+- [Licensing and security audit](AUDIT-1.4.19.md)
 
 The installer and application binaries are currently unsigned, so Windows may
 show a SmartScreen warning. Kaspersky 21.26 scanned byte-identical copies of
@@ -22,11 +22,12 @@ zero detections or suspicions. Microsoft Defender was not running on the build
 host and is not claimed as release evidence. Verify the installer SHA-256
 before running it.
 
-This update integrates the latest DXF macros: confirmed bent non-sheet-metal
-filtering, protected unsaved-window cleanup, fractional thickness filenames and
-checked Unicode/long-path output delivery. Referenced-part export and parent
-assembly subfolders are the defaults. Missing-only export and cooperative
-Alt+S cancellation remain. Configurable shortcuts, assembly
+This update integrates a selected-quantities correction in both DXF macros:
+selected-subassembly export counts selected component occurrences, deduplicates
+overlapping selections, and stops rather than delivering an incomplete result
+when identity or child/configuration reads fail. Full-assembly behavior and the
+prior bent-body, path, and protected-window corrections remain. Missing-only
+export and cooperative Alt+S cancellation remain. Configurable shortcuts, assembly
 backup, Work Logger, viewport thumbnails and read-only previews remain. All
 nine SWPs have matching editable sources and neutral host metadata. Older
 immutable releases and Git revisions retain their original metadata; see the
@@ -35,7 +36,7 @@ audit for testing limits.
 ## Source and build
 
 The exact expanded corresponding source is committed under
-[`source/ExcelsisHelper-1.4.18/`](source/ExcelsisHelper-1.4.18/).
+[`source/ExcelsisHelper-1.4.19/`](source/ExcelsisHelper-1.4.19/).
 
 On Windows with Node.js 22.12 or later:
 
@@ -47,7 +48,7 @@ npm run dist
 ```
 
 See
-[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.18/docs/BUILDING.md)
+[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.19/docs/BUILDING.md)
 for the complete non-launching build and inspection flow.
 
 ## Project links
