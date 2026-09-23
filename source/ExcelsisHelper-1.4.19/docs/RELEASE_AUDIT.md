@@ -1,7 +1,7 @@
-# Release Verification: 1.4.18
+# Release Verification: 1.4.19
 
 The independent public release record is
-[AUDIT-1.4.18.md](https://github.com/simonsystem609/ExcelsisHelper/blob/main/AUDIT-1.4.18.md).
+[AUDIT-1.4.19.md](https://github.com/simonsystem609/ExcelsisHelper/blob/main/AUDIT-1.4.19.md).
 It records the exact source and artifact hashes, licensing/provenance assessment,
 build/tests, dependency/secret/privacy/malware checks and packaged correspondence.
 CANDIDATE_1.4.17.md describes the preserved application baseline. Supplied

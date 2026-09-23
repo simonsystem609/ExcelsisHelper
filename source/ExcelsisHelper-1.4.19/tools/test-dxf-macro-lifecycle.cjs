@@ -17,6 +17,8 @@ const names = [
   "ProcessFullAssembly", "ProcessFullAssemblyInContext", "ProcessAssemblyCandidateSnapshot", "ExportAssemblyCandidate",
   "ExportSelectedSubassemblyParts", "ExportSelectedSubassembliesInContext", "ProcessSelectedSubassemblyContext",
   "CollectSelectedSubassemblyParts", "AddSelectedSubassemblyContext", "IsPartPath", "IsAssemblyPath",
+  "DxfOccurrenceKey", "AddDxfOccurrence", "MergeDxfOccurrences", "BuildSelectedQtyDict",
+  "BuildVisibleSubassemblyPartCandidates", "CollectEligibleSubassemblyChildren",
   "OpenPartForExport", "CloseCandidateDocument", "CloseExplicitlyOpenedPartDocs", "TrackCandidateDocument", "PreserveCandidateDocument",
   "CandidateIsPreserved", "GetModelWindowDocuments", "BuildVisibleDocumentWindowKeyDict", "CloseVisibleDocumentsOpenedByMacro",
   "FindCandidateAssemblyReference",
@@ -40,6 +42,7 @@ function adapt(source) {
     .replace(/\.GetType\b/g, ".DocType")
     .replace(/^([ \t]*)(MsgBox|\w+\.ForceRebuild3) (.+)$/gm, "$1$2($3)")
     .replace(/^([ \t]*)RegisterDxfNameOwner (.+)$/gm, "$1RegisterDxfNameOwner($2)")
+    .replace(/^([ \t]*)(AddDxfOccurrence|MergeDxfOccurrences|CollectEligibleSubassemblyChildren) (.+)$/gm, "$1$2($3)")
     .replace(/\bThen (\w+\.(?:Add|Remove|CloseDoc)|Err\.Raise|TraceRun|PreserveCandidateDocument|ActivateConfigurationChecked|ActivateModelDocument) (.+)$/gm, "Then $1($2)")
     .replace(/^([ \t]*)(\w+\.(?:Add|Remove|CloseDoc|QuitDoc)|Err\.Raise|TraceRun|DxfGetWindowThreadProcessId|PreserveCandidateDocument|TrackCandidateDocument|BeginDxfCandidate|FinishDxfCandidate|RememberOriginalConfiguration|RebuildDocumentIfNeeded|ResolveSelectedPartIfLightweight|ActivateModelDocument|ProcessFullAssemblyInContext|ProcessAssemblyCandidateSnapshot|ExportSelectedSubassemblyParts|CollectSelectedSubassemblyParts|AddSelectedSubassemblyContext|ExportSelectedSubassembliesInContext|ProcessSelectedSubassemblyContext) (.+)$/gm, "$1$2($3)")
     .replace(/^(Function|Sub) ([\s\S]*?)(?=\)\s*(?:As \w+)?\s*\r?\n)/gm, (declaration) =>
@@ -254,20 +257,8 @@ Function ActivateModelDocument(model As Object) As Boolean
   model.WindowOpen = True : swApp.ActiveDoc = model : swApp.Measure()
   Return True
 End Function
-Function BuildVisibleSubassemblyPartCandidates(model As Object, file As String, cfg As String) As Object
-  Dim result As Object = Dict()
-  Dim child As TestDoc = swApp.Docs(LCase(file))
-  For Each comp As TestComponent In child.Components
-    If Not comp.Hidden Then
-      Dim key = DxfCandidateScopeKey(comp.FilePath, comp.ReferencedConfiguration, comp, model, True)
-      If result.Exists(key) Then
-        Dim entry As Object = result(key) : entry(2) = CLng(entry(2)) + 1 : result(key) = entry
-      Else
-        result.Add(key, New Object() {comp.FilePath, comp.ReferencedConfiguration, 1, If(comp.Imported, "source.step", ""), comp})
-      End If
-    End If
-  Next
-  Return result
+Function ComponentImportHint(comp As Object) As String
+  Return If(comp.Imported, "source.step", "")
 End Function
 Function ExportOnePart(model As Object, file As String, cfg As String, qty As Long, folder As String, mode As Integer, face As Object) As Boolean
   Check(model.Config = cfg, "wrong export configuration")
@@ -359,15 +350,14 @@ Sub Main()
         Check(AskDxfRunOptions(docType, count, mode, asmMethod), "route options accepted")
         Check(promptTitles.FindAll(Function(t) t = "Imported parts filter").Count = 1, "every route must ask import scope exactly once")
         Check(g_generalImportedFilter = strict, "chosen import scope retained")
-        Dim done As Object = Dict(), opened As Object = Dict(), qty As Object = Dict()
-        qty.Add(LCase(target.FilePath) & "@A", 1)
+        Dim done As Object = Dict(), opened As Object = Dict()
         Select Case kind
           Case "single", "face"
             ProcessSinglePart(target, target.FilePath, "A", 1, "C:\\out\\", mode, done, If(kind = "face", face, Nothing))
           Case "full"
             ProcessFullAssembly(model, "C:\\out\\", asmMethod, done, opened)
           Case Else
-            ProcessSelectedComponents(model, selected, "C:\\out\\", mode, asmMethod, qty, done, opened)
+            ProcessSelectedComponents(model, selected, "C:\\out\\", mode, asmMethod, done, opened)
         End Select
         Check(exports.Count = If(strict, 0, 1), "import scope enforced for " & kind & "/" & method)
         Check(g_stopBatchReason = "", "route cleanup unexpectedly stopped")
@@ -426,9 +416,7 @@ Sub Main()
       If route = "full" Then
         ProcessFullAssembly(root, "C:\\out\\", method, doneBatch, openedBatch)
       Else
-        Dim counts As Object = Dict()
-        counts.Add(DxfCandidateScopeKey(p.FilePath, "A", a, root), 1)
-        ProcessSelectedComponents(root, selected, "C:\\out\\", MODE_REGULAR, method, counts, doneBatch, openedBatch)
+        ProcessSelectedComponents(root, selected, "C:\\out\\", MODE_REGULAR, method, doneBatch, openedBatch)
       End If
       CloseVisibleDocumentsOpenedByMacro(g_initiallyVisibleDocuments, root)
       Check(doneBatch.Count = 1 And exports.Count = 1 And g_stopBatchReason = "", "dirty hidden component still exports in " & route & "/" & method)
@@ -620,8 +608,7 @@ Sub Main()
     If route = "full" Then
       ProcessFullAssembly(root, "C:\\out\\", 1, doneBatch, openedBatch)
     Else
-      Dim qty As Object = Dict() : qty.Add(LCase(p.FilePath) & "@A", 1)
-      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, 1, qty, doneBatch, openedBatch)
+      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, 1, doneBatch, openedBatch)
     End If
     Check(exports.Count = 0 And a.BodyReads = 1 And Not p.WindowOpen And p.Config = "ORIGINAL", "reference body preflight rejects before part activation in " & route)
     Check(openedBatch.Count = 0 And Not swApp.CloseCalls.Contains(p.FilePath), "rejected part never acquired in " & route)
@@ -683,8 +670,7 @@ Sub Main()
     If route.StartsWith("full") Then
       ProcessFullAssembly(root, "C:\\out\\", method, doneBatch, openedBatch)
     Else
-      Dim qty As Object = Dict() : qty.Add(LCase(p.FilePath) & "@A", 1)
-      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, method, qty, doneBatch, openedBatch)
+      ProcessSelectedComponents(root, selected, "C:\\out\\", 1, method, doneBatch, openedBatch)
     End If
     Check(exports.Count = 0 And a.ResolveCalls = 1 And Not p.WindowOpen And p.Config = "A", "lightweight beam rejected before activation in " & route)
     Check(openedBatch.Count = 0 And Not swApp.CloseCalls.Contains(p.FilePath), "lightweight beam never acquired in " & route)
@@ -713,12 +699,7 @@ Sub Main()
       If route = "full" Then
         ProcessFullAssembly(root, "C:\\out\\", 1, doneBatch, openedBatch)
       Else
-        Dim counts As Object = Dict()
-        For Each comp As TestComponent In root.Components
-          Dim key = DxfCandidateScopeKey(comp.FilePath, comp.ReferencedConfiguration, comp, root)
-          If counts.Exists(key) Then counts(key) = CLng(counts(key)) + 1 Else counts.Add(key, 1)
-        Next
-        ProcessSelectedComponents(root, selected, "C:\\out\\", 1, If(route = "subassembly-context", 2, 1), counts, doneBatch, openedBatch)
+        ProcessSelectedComponents(root, selected, "C:\\out\\", 1, If(route = "subassembly-context", 2, 1), doneBatch, openedBatch)
       End If
       Check(doneBatch.Count = If(group, 2, 1), "shared part dedupes per chosen folder in " & route)
       If group Then
@@ -727,6 +708,58 @@ Sub Main()
         Check(exportedFolders.Contains("C:\\out\\:3"), "flat occurrence total in " & route)
       End If
       Check(openedBatch.Count = 0 And Not p.WindowOpen And Not subDoc.WindowOpen, "grouping retains cleanup in " & route)
+    Next
+  Next
+  For Each grouped As Boolean In New Boolean() {False, True}
+    For Each method As Integer In New Integer() {1, 2, 3}
+      For Each scenario As String In New String() {"one", "two", "overlap", "mixed", "faces", "direct-copies", "full"}
+        root = ResetFixture() : p = Part("selected-plate", True)
+        g_assemblyFolders = grouped
+        Dim unitDoc As New TestDoc With {.FilePath = "C:\\fixture\\repeat-unit.SLDASM", .DocType = 2, .Config = "Default", .Loaded = True, .Referenced = True}
+        swApp.Docs.Add(LCase(unitDoc.FilePath), unitDoc)
+        Dim one = Component(unitDoc, "Default"), two = Component(unitDoc, "Default")
+        one.Name2 = "unit-1" : two.Name2 = "unit-2"
+        Dim first = Component(p), second = Component(p), third = Component(p), fourth = Component(p), loose = Component(p)
+        first.Name2 = "unit-1/plate-1" : second.Name2 = "unit-1/plate-2"
+        third.Name2 = "unit-2/plate-1" : fourth.Name2 = "unit-2/plate-2"
+        first.Parent = one : second.Parent = one : third.Parent = two : fourth.Parent = two
+        one.Children = New Object() {first, second} : two.Children = New Object() {third, fourth}
+        unitDoc.Components = New Object() {Component(p), Component(p)}
+        root.Components = New Object() {one, first, second, two, third, fourth, loose}
+        Dim faceOne As New TestFace With {.Owner = first}, faceTwo As New TestFace With {.Owner = first}
+        Dim items As Object(), expectedQty As Long, expectedScopes As Integer = 1
+        Select Case scenario
+          Case "one"
+            items = New Object() {one} : expectedQty = 2
+          Case "two"
+            items = New Object() {one, two} : expectedQty = 4
+          Case "overlap"
+            items = New Object() {one, first, faceOne, one} : expectedQty = 2
+          Case "mixed"
+            items = New Object() {one, loose} : expectedQty = 3
+            If grouped Then expectedScopes = 2
+          Case "faces"
+            items = New Object() {faceOne, faceTwo, first} : expectedQty = 1
+          Case "direct-copies"
+            items = New Object() {first, third} : expectedQty = 2
+          Case Else
+            items = New Object() {} : expectedQty = 5
+            If grouped Then expectedScopes = 2
+        End Select
+        doneBatch = Dict() : openedBatch = Dict()
+        If scenario = "full" Then
+          ProcessFullAssembly(root, "C:\\out\\", If(method = 2, 2, 1), doneBatch, openedBatch)
+        Else
+          Dim selected = SnapshotSelectedComponents(root, New TestSelection With {.Items = items}, items.Length)
+          ProcessSelectedComponents(root, selected, "C:\\out\\", If(method = 3, MODE_PRECUT, MODE_REGULAR), If(method = 2, 2, 1), doneBatch, openedBatch)
+        End If
+        Dim total As Long = 0
+        For Each output As String In exportedFolders
+          total += CLng(output.Substring(output.LastIndexOf(":"c) + 1))
+        Next
+        Check(total = expectedQty And doneBatch.Count = expectedScopes, "actual route quantity: " & scenario & "/" & method & "/group=" & grouped & " actual=" & total)
+        Check(openedBatch.Count = 0 And Not p.WindowOpen And Not unitDoc.WindowOpen And root.WindowOpen, "quantity routes preserve real-window cleanup")
+      Next
     Next
   Next
   root = ResetFixture()
@@ -872,9 +905,18 @@ Class TestDoc
   End Sub
 End Class
 Class TestComponent
-  Public FilePath As String, ReferencedConfiguration As String, Name2 As String = "fixture-instance"
+  Private Shared nextIdentity As Integer
+  Public FilePath As String, ReferencedConfiguration As String, Name2 As String
+  Sub New()
+    nextIdentity += 1
+    Name2 = "fixture-instance-" & CStr(nextIdentity)
+  End Sub
   Public Hidden As Boolean, Suppressed As Boolean, ExcludedParent As Boolean, Imported As Boolean
   Public Parent As TestComponent, Model As TestDoc
+  Public Children As Object()
+  Function GetChildren() As Object
+    Return If(Children, Model.Components)
+  End Function
   Public Bodies As Object, BodyInfo As Object, State As Long = 3, BodyReads As Integer
   Public FailBodies As Boolean, FailSuppression As Boolean
   Public ResolveCalls As Integer, FailResolve As Boolean, ResolveReference As String = ""
