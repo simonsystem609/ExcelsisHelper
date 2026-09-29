@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: file:; connect-src 'none'; object-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Renderer Smoke</title>
+  <link rel="stylesheet" href="./smoke.css">
+</head>
+<body>
+  <main id="smoke-card">
+    <h1>Renderer smoke passed</h1>
+    <p>Local CSS, module JavaScript, and sandboxed preload loaded.</p>
+  </main>
+  <script type="module" src="./renderer.js"></script>
+</body>
+</html>
