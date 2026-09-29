@@ -26,7 +26,7 @@ afterPack: scripts/after-pack.cjs
 # off because the app has no cookie-backed sessions and ships one shared
 # snapshot. The renderer is loaded from app.asar with BrowserWindow.loadFile(),
 # so Electron's file-protocol privileges must remain enabled; disabling that
-# fuse makes Electron 42.6.1 reject the packaged HTML with ERR_FILE_NOT_FOUND.
+# fuse makes Electron 42 reject the packaged HTML with ERR_FILE_NOT_FOUND.
 # Electron 42's ninth WasmTrapHandlers fuse intentionally remains enabled: its
 # guard-page implementation is lighter than explicit bounds checks. The release
 # audit reads all nine slots because the bundled fuse library configures eight.

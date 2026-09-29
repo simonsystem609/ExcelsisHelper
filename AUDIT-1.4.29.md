@@ -8,10 +8,11 @@ project-authored utilities, and macros are unsigned.
 
 The immutable private producer candidate passed transfer integrity checks.
 Public staging omitted ten development-only probes and the optional settings
-sidecar, and restored the public build/provenance documentation. The exact
-corresponding source is
+sidecar, restored the public build/provenance documentation, and aligned a
+development-only renderer-smoke dependency pin with the audited app versions.
+The exact corresponding source is
 [`source/ExcelsisHelper-1.4.29/`](source/ExcelsisHelper-1.4.29/): 153 files /
-4,771,981 bytes, matching the source ZIP. Project-authored code and nine
+4,771,984 bytes, matching the source ZIP. Project-authored code and nine
 SWP/SWB macro pairs are GPL-3.0-only; see the source
 [provenance](source/ExcelsisHelper-1.4.29/docs/PROVENANCE.md),
 [notices](source/ExcelsisHelper-1.4.29/THIRD_PARTY_NOTICES.md), and
@@ -56,4 +57,4 @@ is bundled. Input/output hashes and caveats are in
 | --- | ---: | --- |
 | `ExcelsisHelper-1.4.29-Setup.exe` | 94,897,593 | `A9206A9566EBEE2B67BF98BB383AED9F522ADB95B8A295BCD10F393C49FE691C` |
 | `ExcelsisHelper-1.4.29-Setup.exe.blockmap` | 101,443 | `318D3ABFCF00AC90668184D39B1E8C804B07F6322D6346104B0D8C8B6C7DF834` |
-| `ExcelsisHelper-1.4.29-source.zip` | 1,444,900 | `378AE48BB0AD0D986373A6DDB12803EDC688B5B51FD1A3384BB0E5ED623080A6` |
+| `ExcelsisHelper-1.4.29-source.zip` | 1,444,899 | `5CCBA3CDD43587A473F637FEECEAD947FCC465F7E8C8933864D0DFAE37F4959E` |
