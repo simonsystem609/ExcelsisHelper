@@ -1,6 +1,8 @@
 # Source and Asset Provenance
 
-This inventory covers Excelsis Helper 1.4.29.
+This inventory covers the Excelsis Helper 1.4.29 application baseline. This
+separate macro revision changes only the two DXF SWP/SWB pairs and associated
+source tests; the immutable 1.4.29 installer is not rebuilt here.
 
 ## Project-owned work
 
@@ -32,9 +34,10 @@ redistributable SOLIDWORKS/SolidCAM binaries.
 | PDF_v1.swb | Project-created drawing PDF exporter | SOLIDWORKS API interoperability only |
 | Radius_v9.swb | Project-owned original | None identified |
 
-The installer contains compiled `.swp` forms of these nine project-owned
-macros. Matching readable SWB source and build-ready SWP artifacts are both
-included in corresponding source; only SWPs are deployed at runtime.
+The original 1.4.29 installer contains compiled `.swp` forms of these nine
+project-owned macros. Matching readable SWB source and build-ready SWP
+artifacts are included here; only the separately published DXF SWPs are
+deployed by the opt-in macro updater.
 `CNCDXF_v1.swb` corresponds to the renamed `CNCDXF_final_v1.swp`.
 
 Configurable macro shortcuts and the DXF selection, cleanup, preflight and

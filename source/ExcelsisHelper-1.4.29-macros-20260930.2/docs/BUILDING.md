@@ -1,5 +1,11 @@
 # Building Excelsis Helper 1.4.29
 
+This directory is the source snapshot for a macro-only revision, not the
+exact source of the immutable 1.4.29 installer. The build details below
+describe that original app baseline. Running a new installer build from this
+revision tree would produce a different artifact and would require a new
+app-release version and audit; no such installer is published here.
+
 On Windows with Node.js 24 and npm, run `npm.cmd ci --legacy-peer-deps --no-audit`,
 `npm.cmd test`, `npm.cmd audit --audit-level=low`, and `npm.cmd run dist` from the source
 root. The pinned application build uses Electron 42.11.3 and electron-builder
