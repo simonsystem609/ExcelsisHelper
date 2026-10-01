@@ -1,0 +1,29 @@
+appId: local.excelsis.renderer-smoke.disabled
+productName: Renderer Smoke Disabled
+electronDist: node_modules/electron/dist
+extraMetadata:
+  name: excelsis-renderer-smoke-disabled
+  version: 1.0.0
+  main: tools/renderer-smoke/main.cjs
+directories:
+  output: tools/renderer-smoke/dist-disabled
+afterPack: tools/renderer-smoke/after-pack.cjs
+files:
+  - tools/renderer-smoke/main.cjs
+  - tools/renderer-smoke/preload.cjs
+  - tools/renderer-smoke/index.html
+  - tools/renderer-smoke/smoke.css
+  - tools/renderer-smoke/renderer.js
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+win:
+  executableName: Renderer Smoke Disabled
+  electronLanguages:
+    - en-US
