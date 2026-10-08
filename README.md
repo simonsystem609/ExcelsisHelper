@@ -12,7 +12,7 @@ capture through the documented SOLIDWORKS API.
 - [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.29/ExcelsisHelper-1.4.29-Setup.exe)
 - [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.29)
 - [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.29/ExcelsisHelper-1.4.29-source.zip)
-- [Latest optional DXF macro revision for Helper 1.4.29](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.29-20261001.1)
+- [Latest optional DXF macro revision for Helper 1.4.29](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.29-20261008.1)
 - [SHA-256 checksums](SHA256SUMS.txt)
 - [Licensing and security audit](AUDIT-1.4.29.md)
 
@@ -36,8 +36,11 @@ optional, manual update through ExcelsisView 1.1.36 or later. It uses
 quantity-first prefixes on short and long DXF names, keeps filename stems
 to at most 20 characters, and preserves collision-safe assignments in a
 per-folder `DXF-names.tsv` map. The map contains source paths and should
-stay within a trusted environment. [Revision source and offline tests](source/ExcelsisHelper-1.4.29-macros-20261001.1/)
-and its [separate audit](AUDIT-MACROS-1.4.29-20261001.1.md) are distinct
+stay within a trusted environment. Revision 20261008.1 also accepts sparse/cutout
+sheet configurations only when exact opposing-face/body-extents checks prove a
+flat slab; bent bodies and unreadable geometry remain rejected.
+[Macro-only corresponding source and offline tests](source/ExcelsisHelper-1.4.29-macros-20261008.1/)
+and its [separate audit](AUDIT-MACROS-1.4.29-20261008.1.md) are distinct
 from the unchanged 1.4.29 installer source. Live SOLIDWORKS export and
 target laser-software acceptance have not been performed.
 
