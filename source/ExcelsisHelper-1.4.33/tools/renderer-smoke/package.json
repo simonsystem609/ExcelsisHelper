@@ -4,7 +4,7 @@
   "private": true,
   "main": "main.cjs",
   "devDependencies": {
-    "electron": "42.6.1",
+    "electron": "42.11.3",
     "electron-builder": "^26.0.12"
   }
 }

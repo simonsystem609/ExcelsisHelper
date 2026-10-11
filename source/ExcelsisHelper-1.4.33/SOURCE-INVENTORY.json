@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "1.4.33",
-  "state": "public-release",
+  "state": "post-release-dev-maintenance",
   "files": [
     {
       "name": "automation.css",
@@ -565,8 +565,8 @@
     },
     {
       "name": "tools/renderer-smoke/package.json",
-      "bytes": 192,
-      "sha256": "811295CE01F4BD1CF937BBF07A2F2FA09F5127A06E4706D5EE2C49AC26FDE298"
+      "bytes": 193,
+      "sha256": "7F34CEDA82A05FF240233591ACDF620713D3096891F950474A153833E8F4D99E"
     },
     {
       "name": "tools/renderer-smoke/preload.cjs",
