@@ -1,0 +1,842 @@
+{
+  "schemaVersion": 1,
+  "version": "1.4.33",
+  "state": "public-release",
+  "files": [
+    {
+      "name": "automation.css",
+      "bytes": 34343,
+      "sha256": "067AAE6AE92B680F9D36CC683FE9C5AD227CAEB36A1F48535C8E9D600D0279AD"
+    },
+    {
+      "name": "automation.html",
+      "bytes": 38168,
+      "sha256": "1BDF7F906335BD9279A97B715529ECB77DD7AAE315DC3C30D3C5AF3F77561E5C"
+    },
+    {
+      "name": "automation.js",
+      "bytes": 207683,
+      "sha256": "DE9D290890639AF64F76C9C877601131B417108D7808D33567E5695D4D409E48"
+    },
+    {
+      "name": "build/icon-256.png",
+      "bytes": 16574,
+      "sha256": "F1653107DED6F64DD49B8EDB3A03A225F73AD5EB2199B51FBA9AC2B7223D202B"
+    },
+    {
+      "name": "build/icon.ico",
+      "bytes": 118854,
+      "sha256": "A3444857F815256F9F1B36F5625F512A4251BED0CE6F734FA98842F76F83C194"
+    },
+    {
+      "name": "cad-model-runtime-host.cjs",
+      "bytes": 3139,
+      "sha256": "04CE26C8AA51B0292F336976ED99EA4B1B135AB8856F7B0A1D0AD48B3242515B"
+    },
+    {
+      "name": "cad-model-runtime/cad-model-capture.cjs",
+      "bytes": 4722,
+      "sha256": "27F3C7CD6358D7EBB438293B32F355DB9B682209FC23F7F710790C06D09DD297"
+    },
+    {
+      "name": "cad-model-runtime/cad-model-export.cjs",
+      "bytes": 6945,
+      "sha256": "EC23F18D5A1F3CE43E9AF0ED5FBBD3A2C0523C01779FB5BFC747617B222E4105"
+    },
+    {
+      "name": "cad-model-runtime/cad-model-mirror.cjs",
+      "bytes": 48896,
+      "sha256": "50D9E7451FFF3DAC1C68EFC7BC95E9382925C9372F0A89B230A93DA96AE72DFB"
+    },
+    {
+      "name": "cad-model-runtime/cad-model-workflow.cjs",
+      "bytes": 19317,
+      "sha256": "83F953F0E7DE55D65369B71595A2B5C289787D4EABB7594A49ECBF5D1B90878C"
+    },
+    {
+      "name": "cad-model-runtime/capture-sw-assembly-geometry.exe",
+      "bytes": 43520,
+      "sha256": "6778A61898FDC81E5BD519E2E764D5CDFDF572261D27A0E8C53A01E3D0DD9353"
+    },
+    {
+      "name": "cad-model-runtime/export-active-glb.vbs",
+      "bytes": 3496,
+      "sha256": "DCA89B8AD296CE4C7879B71916D046203739C52022B198AFB4AAB2D7B0A94314"
+    },
+    {
+      "name": "cad-model-runtime/README.md",
+      "bytes": 2351,
+      "sha256": "5DD9F639E5590B375093731A99120EB491DA47A6E984EAEF0C0E97F87C922386"
+    },
+    {
+      "name": "cad-model-runtime/sw-assembly-capture-session.cjs",
+      "bytes": 6841,
+      "sha256": "634818046C78F1C7526B8F80A94A290A123D68676905EBF3D97B4C38A453B463"
+    },
+    {
+      "name": "date-assembly-runtime-host.cjs",
+      "bytes": 1593,
+      "sha256": "3B5521D7FF0AF5F3FEFB9FD28FA6DF76241F92A25B6B8B4907DA09E524C8E153"
+    },
+    {
+      "name": "docs/BUILDING.md",
+      "bytes": 8785,
+      "sha256": "ACF2E11E18978A80940F071999D8038405F2A08B4F53A4A75ED5FC5851B3BF23"
+    },
+    {
+      "name": "docs/DEPENDENCY_LICENSES.md",
+      "bytes": 30659,
+      "sha256": "541889CA835CFCB7B4BA4D7919158E653C357F82112B0ECC68F4005B0D2290F5"
+    },
+    {
+      "name": "docs/PROVENANCE.md",
+      "bytes": 2867,
+      "sha256": "E30B28EE4FACA4A62E5D907A5893278F4DF770718AF8ED684EABE578B17D4E47"
+    },
+    {
+      "name": "docs/RECENT_FOLDER_BUTTONS_20261009.md",
+      "bytes": 2594,
+      "sha256": "F4D9879627470D629AC565111EA7A8B672D96779D1B3649F5A768C0A9BE9DA7E"
+    },
+    {
+      "name": "docs/RELEASE_AUDIT.md",
+      "bytes": 1540,
+      "sha256": "3FF361FDFFC9BF399BDCDD421B1FCAEF8F5C10054722878CBBC971112E1193CE"
+    },
+    {
+      "name": "electron-builder.yml",
+      "bytes": 4127,
+      "sha256": "A669161DEE43188450579545811B2AAF4B88963DFDD7AEBAAAFAA6D6ECD5CF69"
+    },
+    {
+      "name": "icon-256.png",
+      "bytes": 16574,
+      "sha256": "F1653107DED6F64DD49B8EDB3A03A225F73AD5EB2199B51FBA9AC2B7223D202B"
+    },
+    {
+      "name": "installer.nsh",
+      "bytes": 1759,
+      "sha256": "5099861B5627EFFC156C15478BA723584672C9D5A3B715A783058B46E9367B76"
+    },
+    {
+      "name": "LICENSE",
+      "bytes": 35823,
+      "sha256": "230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809"
+    },
+    {
+      "name": "licenses/DwgThumbnailReader-MIT.txt",
+      "bytes": 1065,
+      "sha256": "E7C46154307BA55DD92CBE35592ED5093FE129B9D0D8F9A407C39EEA54A1253D"
+    },
+    {
+      "name": "licenses/electron-builder-MIT.txt",
+      "bytes": 1084,
+      "sha256": "BED8D0AB3E6031817F775A641FF37313B0F5591BC8BA0ED79B978DAFBD4231CE"
+    },
+    {
+      "name": "licenses/Electron-MIT.txt",
+      "bytes": 1096,
+      "sha256": "5154E165BD6C2CC0CFBCD8916498C7ABAB0497923BAFCD5CB07673FE8480087D"
+    },
+    {
+      "name": "licenses/Elevate-MIT.txt",
+      "bytes": 1548,
+      "sha256": "74BFD22C73B51E52D841DF15B2A2110A8D1B6874723EF9CA6FC2ECC95973A508"
+    },
+    {
+      "name": "licenses/Lucide-ISC.txt",
+      "bytes": 759,
+      "sha256": "951D2350073E726128ABAE3F65A45DC0C28089E20A639FC8BFA76BFBBEF76D8A"
+    },
+    {
+      "name": "licenses/NSIS-COPYING.txt",
+      "bytes": 15488,
+      "sha256": "6CC665347BE5C84B76BF0FD6F85FBB0C33261E89B3408AA3E3E55DBE95E12D89"
+    },
+    {
+      "name": "licenses/ResEdit-MIT.txt",
+      "bytes": 1060,
+      "sha256": "AD05317184B8CD78A770C1F55E386F600FD23FEB88596C797CEB3CCD49F7D6BC"
+    },
+    {
+      "name": "loading.html",
+      "bytes": 1666,
+      "sha256": "7AB6B29A4D924B59144E0240626560CC161CA052212849E2AAACBCD613D685C8"
+    },
+    {
+      "name": "machining-engine/contracts.cjs",
+      "bytes": 17507,
+      "sha256": "D070AEC93EE5AC2F7D08E5633F6A8E8BC9A3A167BE85BB5AAE9F6BC6D61A31BE"
+    },
+    {
+      "name": "machining-engine/drilling-data.cjs",
+      "bytes": 10509,
+      "sha256": "2DC947187E7789F7223F336B2CA0282BA06871141332689AE021EA8FA575246D"
+    },
+    {
+      "name": "machining-engine/drilling-solver.cjs",
+      "bytes": 11033,
+      "sha256": "A6C557B026CC5AE94A6B3EDB9A4227F6A3CA0DD9A202F86350A884D23748B353"
+    },
+    {
+      "name": "machining-engine/face-milling-solver.cjs",
+      "bytes": 13622,
+      "sha256": "78D1B0C6749F1BD9C21C8142BB154AB505FD177162F3BCAC7CE184A67A43CC4F"
+    },
+    {
+      "name": "machining-engine/formulas.cjs",
+      "bytes": 10094,
+      "sha256": "FB919733B917781FF9F59D51FD366E517BD076A16C3131E81D0DA615DA8FD14A"
+    },
+    {
+      "name": "machining-engine/generic-data.cjs",
+      "bytes": 6841,
+      "sha256": "A4875B846EE3976588AF404063CBD38A328503E1BFE74D47EE71D5A30F6626CF"
+    },
+    {
+      "name": "machining-engine/local-analysis.cjs",
+      "bytes": 37169,
+      "sha256": "6C68C94FFB0BA9ACD8B920BC835B2E8D1EEDE77359B44D4E0ED6048C27413F93"
+    },
+    {
+      "name": "machining-engine/materials.cjs",
+      "bytes": 29152,
+      "sha256": "8491788DDEB3DCA24BF6862B00676B3A72970B7160CB12E84299A74FED522B6B"
+    },
+    {
+      "name": "machining-engine/mpf-analysis-worker.cjs",
+      "bytes": 4180,
+      "sha256": "15D97ED2DC214E689FD15B72DD70E53054FB0F15D544B36D0A5E7643319092D1"
+    },
+    {
+      "name": "machining-engine/mpf-parser.cjs",
+      "bytes": 48648,
+      "sha256": "1661048028B7C86B0AC972DF763C36FB993ECB947DC5B4EA7C285ACB2AE53148"
+    },
+    {
+      "name": "machining-engine/mpf-writer.cjs",
+      "bytes": 13265,
+      "sha256": "58D54229C6ADEA4E97A367B9723A463956DC010B2B525A280CD282C6DEB692DC"
+    },
+    {
+      "name": "machining-engine/process-contracts.cjs",
+      "bytes": 12478,
+      "sha256": "D66510752F831FE1B440BEE34276C857F590791F5882A965F855531FC17C0365"
+    },
+    {
+      "name": "machining-engine/schemas/normalized_cutting_record.schema.json",
+      "bytes": 8639,
+      "sha256": "A34ABB3D7A2CAEA39B7E43D0036C84139C0D5AAC609E0F788A5729EE6B6FFCAB"
+    },
+    {
+      "name": "machining-engine/schemas/recommendation_request.schema.json",
+      "bytes": 16338,
+      "sha256": "A81D8B999821F06A39BE31261B34FFADD4559FAFCEB80537AFF336E9339F2339"
+    },
+    {
+      "name": "machining-engine/schemas/recommendation_response.schema.json",
+      "bytes": 10622,
+      "sha256": "B9A06CAC33289A3425D15BDB9CCCF0AD408FAE8EA85E1DF2AFF22FC8836A9B3A"
+    },
+    {
+      "name": "machining-engine/solver.cjs",
+      "bytes": 20332,
+      "sha256": "B476C02902DBC052CB9362A1527E6CBCCA45A161DADB1EC69AB62F3230C7E7BA"
+    },
+    {
+      "name": "machining-engine/tapping-data.cjs",
+      "bytes": 12356,
+      "sha256": "50DF47ECB3861CA7C72E160213F8BBB3499B86CE516D4E319FDBA16A2A2AB579"
+    },
+    {
+      "name": "machining-engine/tapping-solver.cjs",
+      "bytes": 13782,
+      "sha256": "518F77D74D16BE741A7C65DF96EA7E81F49FCB27F883ACFF16FC75B99B73E899"
+    },
+    {
+      "name": "macros/BackupAssembly_v1.swb",
+      "bytes": 29999,
+      "sha256": "510E15ECEBCBD712FC348A2533A189D9A308F717FF256E9393B4211AF632A1EC"
+    },
+    {
+      "name": "macros/BackupAssembly_v1.swp",
+      "bytes": 38400,
+      "sha256": "A6254FEDA4E49C33712A3FF497F324AF2164C7F0880B8AE69B2389199FA3CB57"
+    },
+    {
+      "name": "macros/BOM_v19_ROfriendy.swb",
+      "bytes": 80364,
+      "sha256": "C677CC64A97172BFB3C25329DCB080A78751E154399D383CF2204B41EE2C3A26"
+    },
+    {
+      "name": "macros/BOM_v19_ROfriendy.swp",
+      "bytes": 140288,
+      "sha256": "3FE75ECCBC9CC1C823940FCF843643993C7F2109BF07E7C87DC1E9928DB8B258"
+    },
+    {
+      "name": "macros/BOM_v19.swb",
+      "bytes": 80088,
+      "sha256": "F3210D114D6106CE70D64C6B2FB8C6F9A8C54CE8E81A0C22420C9C4A98954467"
+    },
+    {
+      "name": "macros/BOM_v19.swp",
+      "bytes": 139776,
+      "sha256": "74B12C83FE2ADA8A84333F94175C42926BD6C6ECF3651995A478E602C52953E8"
+    },
+    {
+      "name": "macros/CNCDXF_final_v1.swp",
+      "bytes": 94208,
+      "sha256": "2CADE371E138AEAF7106FF723C62405AC8EE4B486F3E676E9434C251B8EB128A"
+    },
+    {
+      "name": "macros/CNCDXF_v1.swb",
+      "bytes": 84042,
+      "sha256": "D15ACAF54EE100CFC44CCD0400625EB05E86D828DD2E36CE0C0C70181B7547F3"
+    },
+    {
+      "name": "macros/CrawlScrews_v1.swb",
+      "bytes": 27217,
+      "sha256": "90B0CCEEBDB72BB0DE7D62CDD076CD788EAA8944FE9EA59BCCCE0255FB3B87AF"
+    },
+    {
+      "name": "macros/CrawlScrews_v1.swp",
+      "bytes": 56320,
+      "sha256": "EF52B19AA0E0D0EA34E58EC89BFFD738691A4E92CDFC3A06E2C5002E08D5F29E"
+    },
+    {
+      "name": "macros/DXF_v16_ROfriendy.swb",
+      "bytes": 283355,
+      "sha256": "2721479C8F0F991EE0BE76895A8C26D02C042E9F2052F14FACD3B8AC5A7C3A63"
+    },
+    {
+      "name": "macros/DXF_v16_ROfriendy.swp",
+      "bytes": 340480,
+      "sha256": "0DA22A9EC98B3FB33B298739FBD53BA8313EDB7CC0DB30453FCC4DAACEC1EB51"
+    },
+    {
+      "name": "macros/DXF_v16.swb",
+      "bytes": 284902,
+      "sha256": "654DDA81BB28EAF8F1D506D23A7A3EEC737D7F16C888B7E7F0F71B4F8F5FED23"
+    },
+    {
+      "name": "macros/DXF_v16.swp",
+      "bytes": 345600,
+      "sha256": "2A55829A9E24999CA03B117B3C54ADC98A6A92794AD20826C9873B2CE9D37A3B"
+    },
+    {
+      "name": "macros/PDF_v1.swb",
+      "bytes": 33534,
+      "sha256": "008FA95BB4B4595F3B48BEED4791EC57C7921E850F7EA2FDE2B1B2871C080CB0"
+    },
+    {
+      "name": "macros/PDF_v1.swp",
+      "bytes": 313344,
+      "sha256": "54C949216C9136A24A44365CDF082CDC952E93A07A98352FDB0857669A24BFC6"
+    },
+    {
+      "name": "macros/Radius_v9.swb",
+      "bytes": 61728,
+      "sha256": "CF8B526CFE3F861A80042576C236273300B3477A09D48C0B503724218C29FF2C"
+    },
+    {
+      "name": "macros/Radius_v9.swp",
+      "bytes": 45568,
+      "sha256": "4F30CFC2F84107F465EB6B495A1622DE0C4D224EEAC26CD5291CE8DC9F19ECD0"
+    },
+    {
+      "name": "main.cjs",
+      "bytes": 450001,
+      "sha256": "13D59AD9A094FDCD74E5B00E4E66E4250BA1CFC139BBD812B56FD394CC3C6260"
+    },
+    {
+      "name": "package-lock.json",
+      "bytes": 89061,
+      "sha256": "8E0CF5471E701DD0BB28823F6682983B6AD576BE35CDB884CEDEB8C907078469"
+    },
+    {
+      "name": "package.json",
+      "bytes": 3174,
+      "sha256": "5CB07C9A60F5137E5AFD69E85F4D7FCF9445382DC29D98E0E495BDB1A15E6291"
+    },
+    {
+      "name": "preload.cjs",
+      "bytes": 6822,
+      "sha256": "98E2838F2E0F3A460489D414E4AE2B40300EE8276AB2476B553443D16DB8A783"
+    },
+    {
+      "name": "README.md",
+      "bytes": 3167,
+      "sha256": "6B626D654127538888EEF41BF0AB28B80CAB62D1718A42709912D801FD0D7DD0"
+    },
+    {
+      "name": "recent-doc-maintenance.cjs",
+      "bytes": 2311,
+      "sha256": "EB7CAC635078DB3B0C65903B37FB3AEDB9521E5A07059B29A289243DAD0483D6"
+    },
+    {
+      "name": "scripts/activity-watcher.ps1",
+      "bytes": 8969,
+      "sha256": "77C574DE87D94139BC82D59A3F3CC4FBF75F16CAE9B61F7E7AEFD9193C4F87EC"
+    },
+    {
+      "name": "scripts/after-pack.cjs",
+      "bytes": 1958,
+      "sha256": "3115804592003392F1EBB423CE847A80862BAB789E65C171C5443CBCFFBD7FF3"
+    },
+    {
+      "name": "scripts/automation-defaults/_version.txt",
+      "bytes": 6,
+      "sha256": "33158972A53877B421CFE2598B8D93CAB169963A4964B45EE889E85349979018"
+    },
+    {
+      "name": "scripts/automation-defaults/create-cam-folder.ps1",
+      "bytes": 17727,
+      "sha256": "625A3C0E93B729D7FA4BE69890BFD50D6050F009A66B879B576F0EEEFEA0DA52"
+    },
+    {
+      "name": "scripts/automation-defaults/README.md",
+      "bytes": 835,
+      "sha256": "F78FDDA5706A68A15D7CE376F139C1AFDC79B276C472C92BF54B6F295A18B481"
+    },
+    {
+      "name": "scripts/build-cad-utilities.ps1",
+      "bytes": 1870,
+      "sha256": "0246BCB09424DD65D57511ECFD9EDFE1205AE8D655299CF9F1E8718A72F379B5"
+    },
+    {
+      "name": "scripts/capture-sw-assembly-cache.cs",
+      "bytes": 9810,
+      "sha256": "D760A1478F927DAEE87C9C95BC611B02A3A7A62BBFE91754381BCCF07AE86BE2"
+    },
+    {
+      "name": "scripts/capture-sw-assembly-geometry.cs",
+      "bytes": 30971,
+      "sha256": "B29E91F69338F32A4508E370ADE0918E3E2360D245B146BAED332DBF045BBA7B"
+    },
+    {
+      "name": "scripts/capture-sw-assembly-session.cs",
+      "bytes": 14776,
+      "sha256": "68FEABAAF48F3774B9B4B8327A08CF1BADDF9B118DBB31C109950EFEB0C39E8E"
+    },
+    {
+      "name": "scripts/capture-sw-viewport.ps1",
+      "bytes": 3897,
+      "sha256": "9621A921885BDB9B812D83879B450A039C4C8857AFEF0A1BCFB1DB2208AE8DF0"
+    },
+    {
+      "name": "scripts/capture-sw-viewport.vbs",
+      "bytes": 2331,
+      "sha256": "507E98A2DC2AAEDD427722374D0BE2902DB1CD380C4BB9D0EEB0A48B1E65C8E5"
+    },
+    {
+      "name": "scripts/date-assembly-files.exe",
+      "bytes": 54784,
+      "sha256": "04C1199134501DF991B80B9CC5FE301B73C0947FC99DDD7724795B776B264A2D"
+    },
+    {
+      "name": "scripts/doc-search-worker.cjs",
+      "bytes": 14531,
+      "sha256": "52EA67D4317B1077A91D303B04FE983580A6ED71E414915969563DEBB6FA2394"
+    },
+    {
+      "name": "scripts/extract-embedded-preview.cjs",
+      "bytes": 4507,
+      "sha256": "0040734C00D67FD1D2D239D16B6DFEC0168A6B39773D9978C4D9AA3CA0DC4A64"
+    },
+    {
+      "name": "scripts/extract-sw-thumbnails.ps1",
+      "bytes": 50722,
+      "sha256": "3EDA4B46D79967A12D826EBBD8A7FF0075B51EB6CFA4AF3E7055246B870AD683"
+    },
+    {
+      "name": "scripts/find-sw-addins.ps1",
+      "bytes": 2344,
+      "sha256": "5DC216A46D9BEE4173EE8C7CC5955AAD55190EFF3A5C436E90B7EBF4254BFA7D"
+    },
+    {
+      "name": "scripts/hotkey-helper.ps1",
+      "bytes": 35028,
+      "sha256": "6D7015B6AEC8C388DF13279ADB05C0B2B22EAD2E555EA138CE5F432DA6E7DF4C"
+    },
+    {
+      "name": "scripts/set-ecoqos.ps1",
+      "bytes": 8598,
+      "sha256": "69F845E2B4DBAEE3F4B997E45DAC20A77D455CF566332B7E55A7F6B27F0FDD1C"
+    },
+    {
+      "name": "scripts/solidworks-bridge.ps1",
+      "bytes": 54829,
+      "sha256": "921EFC1F7EEC2B225F28205A25D02E62646D0097E2EAB63DB517642FF4C8F6AD"
+    },
+    {
+      "name": "scripts/solidworks-watcher.vbs",
+      "bytes": 16037,
+      "sha256": "512BA75E935581445CF64EC310B30E6B698DF6E1B745E60774AA277CB3E58C4F"
+    },
+    {
+      "name": "scripts/sw-addin-bridge.ps1",
+      "bytes": 5663,
+      "sha256": "B58514A2F54AA5B1534D941E9BE78B60957F0559AF62FD9ABA5813C027A743C7"
+    },
+    {
+      "name": "scripts/sw-addin-status.ps1",
+      "bytes": 5443,
+      "sha256": "CBBCAC8AF90B53D798C5CD50CA18D8AEC849DE0901A9E619E0B6B389328AB809"
+    },
+    {
+      "name": "THIRD_PARTY_NOTICES.md",
+      "bytes": 4725,
+      "sha256": "89B9094C99797BB8D6276EF6F7691494BA2E9F3E7DBA2E279CD1B798CF92897E"
+    },
+    {
+      "name": "thumbnail-scheduler.cjs",
+      "bytes": 4739,
+      "sha256": "489BC3A93A28D8B83569C41096C6D17D9D7F8868C18BD8F96E823A84C0E55FA1"
+    },
+    {
+      "name": "tools/audit-build-correspondence.cjs",
+      "bytes": 5801,
+      "sha256": "76B7F9825E94DFEBED8CC7F5FE34249FE5F4F61C97D7C640D2A584E402187162"
+    },
+    {
+      "name": "tools/audit-packaged-runtime.cjs",
+      "bytes": 3461,
+      "sha256": "AEB2A040626649BE3683C2E9E9BB3F438895048F6789D450372A33FB69349567"
+    },
+    {
+      "name": "tools/date-assembly-files.cs",
+      "bytes": 49225,
+      "sha256": "286FB6F1220C0BB0AD40B151C77A348BC32E7B090F9567B5CC9D813D0048E831"
+    },
+    {
+      "name": "tools/generate-license-inventory.cjs",
+      "bytes": 2569,
+      "sha256": "45ECBE420D58A577A0DC229080EFA42F791CFE1B076A655F39B550ABF9B3EB60"
+    },
+    {
+      "name": "tools/read-macro-projects.ps1",
+      "bytes": 3389,
+      "sha256": "DD852DF6F8DDECCFB8F03B20F6F3AAB0EBC68F4F94E77CEE1DE9AE0D8E372416"
+    },
+    {
+      "name": "tools/renderer-harness/check-document-card-layout.cjs",
+      "bytes": 8179,
+      "sha256": "5ACEAF2A382769ABCB23187454F3FD7006013CA5587800F9ABFC32E2EF76C83F"
+    },
+    {
+      "name": "tools/renderer-harness/check-recent-folder-buttons.cjs",
+      "bytes": 8345,
+      "sha256": "BD82FDC420A93E18AAEE6632071512C8D48597D89218FFCDE5438E7C21EDC647"
+    },
+    {
+      "name": "tools/renderer-harness/mock-api.js",
+      "bytes": 22526,
+      "sha256": "0A28AB50072218875926AFBDD3FF25CCE62B589C95EE3523E721D4D9B6B23CCF"
+    },
+    {
+      "name": "tools/renderer-harness/server.cjs",
+      "bytes": 3559,
+      "sha256": "0CB8EE7FA78138AEACE56BA1092C0B8F04E403B9D870D5DC2ED2157CDFD9C616"
+    },
+    {
+      "name": "tools/renderer-smoke/after-pack.cjs",
+      "bytes": 448,
+      "sha256": "B790ECB92FE21B48220CD19FD496ADECF8FE9FD077562F210C63F3202DF9A32B"
+    },
+    {
+      "name": "tools/renderer-smoke/electron-builder-disabled.yml",
+      "bytes": 919,
+      "sha256": "0E18FB8F524F2F38636A879A8613B77DF0C5113D5D86C7127F47C09ABD46EDF6"
+    },
+    {
+      "name": "tools/renderer-smoke/electron-builder-enabled.yml",
+      "bytes": 913,
+      "sha256": "9C41CAE29CD9FAC944017FABFD5E941B0CA42FB3D2DA64DEBFDF90F2E293365B"
+    },
+    {
+      "name": "tools/renderer-smoke/index.html",
+      "bytes": 626,
+      "sha256": "1428BD07AAC2BBB9FB865F7C5201153EDA3B6D9335E6C54BD297DC5DDDA4FF82"
+    },
+    {
+      "name": "tools/renderer-smoke/main.cjs",
+      "bytes": 2918,
+      "sha256": "6A28718B0F87C9C547DF111461AC2A4083F12B3E91C32728C97E34B921C2E37D"
+    },
+    {
+      "name": "tools/renderer-smoke/package.json",
+      "bytes": 192,
+      "sha256": "811295CE01F4BD1CF937BBF07A2F2FA09F5127A06E4706D5EE2C49AC26FDE298"
+    },
+    {
+      "name": "tools/renderer-smoke/preload.cjs",
+      "bytes": 115,
+      "sha256": "539C5707F7497E18B573B1E3CBBF962E603847A543A459A05B8C295D0619F826"
+    },
+    {
+      "name": "tools/renderer-smoke/renderer.js",
+      "bytes": 94,
+      "sha256": "BA576C76A813D8D917FC2DA43B55A1CFF09FFDAC2A12C84DA08FFCF1153CEF9E"
+    },
+    {
+      "name": "tools/renderer-smoke/smoke.css",
+      "bytes": 298,
+      "sha256": "326BEDCC075DC82B346352A8A1226F9E51A2955813728D6C71D12B574C4F20E5"
+    },
+    {
+      "name": "tools/test-activity-probe.cjs",
+      "bytes": 6831,
+      "sha256": "0B80D98BC278792074431B95EB65F17CB419ABCB87143612BCD46350839EC62A"
+    },
+    {
+      "name": "tools/test-cad-model-cache.cjs",
+      "bytes": 11667,
+      "sha256": "CAA7C4421A9D82C40511423D4044A4E867335BD34B4C115A1170F01B30DA3C97"
+    },
+    {
+      "name": "tools/test-cad-model-capture.cjs",
+      "bytes": 3306,
+      "sha256": "E06D9BB5A4F83E54BEC73AF7881D38A8041B3078B379A69C6689230F681B6A40"
+    },
+    {
+      "name": "tools/test-cad-model-export.cjs",
+      "bytes": 5955,
+      "sha256": "984213CC59958B0228F69795BACEC8E175BA5B901F5A2DCDA542AC77B7D420D5"
+    },
+    {
+      "name": "tools/test-cad-model-mirror.cjs",
+      "bytes": 26867,
+      "sha256": "8EFB4AB78E91DCA4E44A4463537A5DC3FF37AB4CA9050BA97A0B9478C2D4713D"
+    },
+    {
+      "name": "tools/test-cad-model-runtime.cjs",
+      "bytes": 2864,
+      "sha256": "2630FE6DF38CA0B0DC3718DFD3BD19982384A25F0169D162CA4CC918A8A4A8E2"
+    },
+    {
+      "name": "tools/test-cad-model-session.cjs",
+      "bytes": 2772,
+      "sha256": "9ED0DABA2F5E81591CAD0018D26E16BA16088956C169323F26BA0FD619D1476B"
+    },
+    {
+      "name": "tools/test-cad-model-workflow-timing.cjs",
+      "bytes": 5485,
+      "sha256": "3F4103F846242EED4922ECFF70ACF9F260384D3E9D66D768BECF0370252E3097"
+    },
+    {
+      "name": "tools/test-cncdxf-output.cjs",
+      "bytes": 18749,
+      "sha256": "BF6417F0D64C3F82C642112711F6D3E7F1743B1DA9F7AE073D5B7E6432560D6F"
+    },
+    {
+      "name": "tools/test-create-cam-project-detection.ps1",
+      "bytes": 1370,
+      "sha256": "91C93BFC259C7F4E892E8DAEE9082FDF572F298BFB1A22B1F74A2BE7CC181D6C"
+    },
+    {
+      "name": "tools/test-date-assembly-files.cjs",
+      "bytes": 6181,
+      "sha256": "6A5C19A9860AD6D676A9467BC2EEFFE2D6835B6EAB2FB360A736C97C64EB590B"
+    },
+    {
+      "name": "tools/test-date-assembly-missing.cs",
+      "bytes": 12104,
+      "sha256": "7DB5DC2966BD20FA7141F1D7D9856E0E275DA7BD3CDA05D5153B0ACE438668FB"
+    },
+    {
+      "name": "tools/test-date-assembly-snapshot.cs",
+      "bytes": 3156,
+      "sha256": "A0CEFFDB930FC33E3F89C61014DAC664F29774467833CB99334EA443F430E60B"
+    },
+    {
+      "name": "tools/test-doc-search-worker.cjs",
+      "bytes": 8589,
+      "sha256": "ED1531BD60F7F3D7A6DC1F2895473FBE99EBF6AD60B83B2B43E66CBB346107BF"
+    },
+    {
+      "name": "tools/test-dxf-macro-filters.cjs",
+      "bytes": 51491,
+      "sha256": "371858F3727FD262B9C549BE1DD578CF165896786833B18198104414C029C4F3"
+    },
+    {
+      "name": "tools/test-dxf-macro-lifecycle.cjs",
+      "bytes": 64097,
+      "sha256": "50593FD1CB9E5CE53ADCE93757D08A22D502E734E8A30CD333AB7D577E8B10A9"
+    },
+    {
+      "name": "tools/test-dxf-macro-names.cjs",
+      "bytes": 24669,
+      "sha256": "42B6C860E443ADD6A62D8F3585D540210B37344DE9BB63111E6B073B051C7D89"
+    },
+    {
+      "name": "tools/test-dxf-macro-paths.cjs",
+      "bytes": 11821,
+      "sha256": "F65A05E89DC733C2AFD7990EAD2B8E5FC161751D2B4F3D371F135E48F7B22193"
+    },
+    {
+      "name": "tools/test-ecoqos.cjs",
+      "bytes": 1770,
+      "sha256": "432C914D94642EEC9260DCFAA0C5A61206DBF6025CA7A31317192B8CDA466665"
+    },
+    {
+      "name": "tools/test-embedded-preview.cjs",
+      "bytes": 4332,
+      "sha256": "6BADE35D7581A62E8CFBB33041B909E5632BC2CEFF90254E572E309371BFD49A"
+    },
+    {
+      "name": "tools/test-gcode-parser.cjs",
+      "bytes": 10161,
+      "sha256": "D53E7B021B1578C8CAB3A23A0244FA7F421DC73F572427826425843715C89DD3"
+    },
+    {
+      "name": "tools/test-machining-engine-drilling.cjs",
+      "bytes": 3496,
+      "sha256": "AECEDD45FCF06C5060D426A50E18F8AB5258FAFF8421AC88A4C224270E1098DA"
+    },
+    {
+      "name": "tools/test-machining-engine-face-milling.cjs",
+      "bytes": 4887,
+      "sha256": "F82441B298B68F39AB73674BE6AB2640789F4F1DFC47B6B8185A879384D998B4"
+    },
+    {
+      "name": "tools/test-machining-engine-formulas.cjs",
+      "bytes": 4604,
+      "sha256": "E8C5E081206BACA4053ADBDB2FCE3A46DA5C42DEA893AADFC3F8F17454F0C614"
+    },
+    {
+      "name": "tools/test-machining-engine-local-analysis.cjs",
+      "bytes": 10972,
+      "sha256": "19ADA435FB72C61B05FE6D753DA87DD412417FA19D59F99802A2656DCD42B2EC"
+    },
+    {
+      "name": "tools/test-machining-engine-materials.cjs",
+      "bytes": 5529,
+      "sha256": "18A27F7681607E85E4C72CE095438FDCC8CAE03523C2F25BF85960A652AFE12C"
+    },
+    {
+      "name": "tools/test-machining-engine-mpf-writer.cjs",
+      "bytes": 4183,
+      "sha256": "1916D57C5F3CC792F60CE32BFC86070BD6DD62D4304C1102150424C02A110697"
+    },
+    {
+      "name": "tools/test-machining-engine-solver.cjs",
+      "bytes": 5221,
+      "sha256": "23E4929002C6BDE858EC1A5C7CB80AD5229A992127E66C663F2B74BEDA75F737"
+    },
+    {
+      "name": "tools/test-machining-engine-tapping.cjs",
+      "bytes": 4365,
+      "sha256": "00026F444B36260A9B984CE0CC9788FC3CF40A7D4EC7AF46C798BD9217BCE022"
+    },
+    {
+      "name": "tools/test-machining-engine-worker.cjs",
+      "bytes": 4020,
+      "sha256": "47AB1F0E90D1FE5C728D74580327A9C530C722A208BB3459BAA4A2F2D096DE8C"
+    },
+    {
+      "name": "tools/test-macro-export-folder.cjs",
+      "bytes": 11634,
+      "sha256": "9423F1DBAA70886E37FE0968FA597B22B06C76C62BFAB281D35DE55FED10AC97"
+    },
+    {
+      "name": "tools/test-macro-hotkey-helper.cjs",
+      "bytes": 6150,
+      "sha256": "9D1AA9199F2EBE8656D4569F06D7BD39177C8BED1E86DC18E1F0A5312009E3E9"
+    },
+    {
+      "name": "tools/test-macro-launch.cjs",
+      "bytes": 11227,
+      "sha256": "6FF894637E3FA83F6F55A31A318A2D385E93647AF5FA9500ED185634D2417DAB"
+    },
+    {
+      "name": "tools/test-macro-privacy.cjs",
+      "bytes": 1669,
+      "sha256": "BB09E7FC92E85DD535CC0D4E337342E90F757B5F7DA1B016706FB8A49949EDF6"
+    },
+    {
+      "name": "tools/test-macro-settings-sync.cjs",
+      "bytes": 9824,
+      "sha256": "258091C403E596CE2882024B6D3189F82DA88069D589F1890A27DFE7037EF4BF"
+    },
+    {
+      "name": "tools/test-macro-shortcuts-renderer.cjs",
+      "bytes": 5914,
+      "sha256": "2140EAE270F60400D940236E3FC6C1A6907FEC2C6A0B7C3F67BC82C073ED5BFA"
+    },
+    {
+      "name": "tools/test-process-policy.cjs",
+      "bytes": 6751,
+      "sha256": "C93250BA00C9E4D3E906F50B41CEC38D6457B606633853ECD884064098BAFB55"
+    },
+    {
+      "name": "tools/test-radius-macro.cjs",
+      "bytes": 33839,
+      "sha256": "8B21C3CE71D06CE44DDF153B3EE69E1E71DB5870555F401C52EFF96EE0D09A9F"
+    },
+    {
+      "name": "tools/test-recent-doc-maintenance.cjs",
+      "bytes": 1838,
+      "sha256": "6FF0DF5D2251BE0654031C7473E3A3295610C17856336449380B4DF33055D44E"
+    },
+    {
+      "name": "tools/test-recent-doc-suppression.cjs",
+      "bytes": 3958,
+      "sha256": "987B66FA1EE47EC0437D9DD9D5F9539C1BAB1190B6C55A93ACB12E2BE5D4C22E"
+    },
+    {
+      "name": "tools/test-recent-folder-shortcut.cjs",
+      "bytes": 8659,
+      "sha256": "5D7523D45EF0128EFEEF5DDBEA9F2BD877C37E5C42CA98981100F8D62D2D3812"
+    },
+    {
+      "name": "tools/test-release-hardening.cjs",
+      "bytes": 41139,
+      "sha256": "A4D4D56B4D41825C87A30B2BA38B081A25FCBA1CB9230F687C519DAEB223409E"
+    },
+    {
+      "name": "tools/test-renderer-polling.cjs",
+      "bytes": 2131,
+      "sha256": "143A78332DE3EDF667188CB691AFDB39ABF0F76F1C7B5E0992F881734B003D1B"
+    },
+    {
+      "name": "tools/test-settings-config.cjs",
+      "bytes": 18395,
+      "sha256": "682181FE6B1A5AB5368878478A5494DB4E312843F994DD0A1CBE57292E535A42"
+    },
+    {
+      "name": "tools/test-solidworks-watcher.cjs",
+      "bytes": 5433,
+      "sha256": "2C9B5CF8F1B2598C0F929634E3C237D1EB2C63ED835A2DFAA730FC084C50564E"
+    },
+    {
+      "name": "tools/test-thumbnail-scheduler.cjs",
+      "bytes": 2567,
+      "sha256": "71CC565FA1BEFA656DC15C265BA71DD11B04686889E33532E792B828EF4E130A"
+    },
+    {
+      "name": "tools/test-viewport-thumbnail.cjs",
+      "bytes": 11261,
+      "sha256": "0F7DBAF53269732EADAA94368732E7D6781C12278FFF90AEEBC7779BE10E3C26"
+    },
+    {
+      "name": "tools/test-worklog-export.cjs",
+      "bytes": 12104,
+      "sha256": "3CBEF6DC478C72D0F3CE40D792D815529B53567DF010451FE5ED3F549B8B417F"
+    },
+    {
+      "name": "tools/test-worklogger-unsaved.cjs",
+      "bytes": 14407,
+      "sha256": "A978E68593668C5E68E726E3F0738AEDEA483413A9E231325705EB3DC18CF008"
+    },
+    {
+      "name": "tools/test-worklogging-settings.cjs",
+      "bytes": 9362,
+      "sha256": "067FBD16435525784E1BD1FA57DAF7E150BECE8EFDFC058636E11EB8C6ACA520"
+    },
+    {
+      "name": "worklogger-unsaved.cjs",
+      "bytes": 14015,
+      "sha256": "632AA82F8E47D0EA88AEDBE4985C538C31957DF5135F9CD3421F35E7A9632526"
+    }
+  ]
+}
