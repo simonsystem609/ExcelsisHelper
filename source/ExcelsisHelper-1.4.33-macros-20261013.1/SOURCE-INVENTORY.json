@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "version": "1.4.33",
+  "macroRevision": "20261013.1",
+  "state": "macro-only-public-release",
+  "files": [
+    {
+      "name": "LICENSE",
+      "bytes": 35823,
+      "sha256": "230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809"
+    },
+    {
+      "name": "README.md",
+      "bytes": 1530,
+      "sha256": "FFCA5FB3FFC675F3EAC92CC4E391BD75F8DF0F2B9615E2BC1E58B4B46274217F"
+    },
+    {
+      "name": "docs/DXF_EMBEDDED_METADATA_20261013.md",
+      "bytes": 4909,
+      "sha256": "F9DFBE5FF02BDF1A4D7BDEC86E989C22207406C83107994827ADEBF0C01E02D7"
+    },
+    {
+      "name": "docs/DXF_OVERFLOW_NUMBERS_20261012.md",
+      "bytes": 1700,
+      "sha256": "7B21450586903F5AE9CFE3DD861F0537BB49645FE7B69D1DF0FEE5F21AD7AA08"
+    },
+    {
+      "name": "docs/DXF_SELECTION_METADATA_20261013.md",
+      "bytes": 4602,
+      "sha256": "ABAF1683F042397629D03CF7A57A8DEF4615601A4D7C7C6FE2D66C3870E431BC"
+    },
+    {
+      "name": "docs/DXF_SHORT_NAMES_20260930.md",
+      "bytes": 1913,
+      "sha256": "E4F0EE9EAF7F2368D8E46F1DAF493FBE4A1AEEBC7B3CA1BF215C36C99248F500"
+    },
+    {
+      "name": "macros/DXF_v16.swb",
+      "bytes": 313200,
+      "sha256": "C9BBEBA48096695DA808F0B5F379062A93BBF847C571068FDCED5DBB7F003558"
+    },
+    {
+      "name": "macros/DXF_v16.swp",
+      "bytes": 355328,
+      "sha256": "56B8A23CCD7CE56070F64540C18D58EAA2A6C0B9DCD2DB7D2DB11ADB94264E74"
+    },
+    {
+      "name": "macros/DXF_v16_ROfriendy.swb",
+      "bytes": 311653,
+      "sha256": "36E002E4964E5EF94EFD21313F9AA2C8A59A6BC45E67BD213CDC01D6A7F47F39"
+    },
+    {
+      "name": "macros/DXF_v16_ROfriendy.swp",
+      "bytes": 351232,
+      "sha256": "3899D84137A822D8CB247671F14403EF238E0A560EF354A9E44D15F4553BC6CB"
+    },
+    {
+      "name": "tools/read-dxf-metadata.cjs",
+      "bytes": 4723,
+      "sha256": "E43C8AE72F905E6FA437728CB15C4C31EF83FA2ED44B3BE54767184056392E2A"
+    },
+    {
+      "name": "tools/test-dxf-macro-filters.cjs",
+      "bytes": 57275,
+      "sha256": "A72B2D0C54A75B683CB35840348692FA27F9FB2F325E5D29734764638CF680D6"
+    },
+    {
+      "name": "tools/test-dxf-macro-lifecycle.cjs",
+      "bytes": 67306,
+      "sha256": "4DA937647E509C8F9CD68A3C2745584E9443256E91855C2416719C68A2F54514"
+    },
+    {
+      "name": "tools/test-dxf-macro-names.cjs",
+      "bytes": 30735,
+      "sha256": "B70EA2C8261037CA12A1CA89356C881FAE851198F3AF80AAA5D6C25A2F86CB0C"
+    },
+    {
+      "name": "tools/test-dxf-macro-paths.cjs",
+      "bytes": 14905,
+      "sha256": "7E27180437146B44112EE08F3618C8E8901877466725EA2757749501BE8E6C87"
+    }
+  ]
+}

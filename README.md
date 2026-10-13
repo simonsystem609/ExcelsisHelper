@@ -12,7 +12,7 @@ capture through the documented SOLIDWORKS API.
 - [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.33/ExcelsisHelper-1.4.33-Setup.exe)
 - [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.33)
 - [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.33/ExcelsisHelper-1.4.33-source.zip)
-- [CNC/DXF macro revision for Helper 1.4.33](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.33-20261011.1)
+- [Latest laser DXF macro revision for Helper 1.4.33](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.33-20261013.1)
 - [SHA-256 checksums](SHA256SUMS.txt)
 - [Licensing and security audit](AUDIT-1.4.33.md)
 
@@ -37,9 +37,20 @@ backs up existing macros and offers Retry/Later if SOLIDWORKS has locked a
 file; save your work and close or restart SOLIDWORKS when prompted. No
 background macro replacement or forced process termination occurs.
 
+Optional laser DXF revision **20261013.1** adds selection-only/all-visible
+instance scope, embedded full filenames/configurations and safe tight-budget
+numbering. It is compatible only with Helper 1.4.33 and does not replace or
+bump the app installer. The manual Update macros button supplies the newer
+files; CNC DXF remains unchanged. New laser exports no longer use the TSV map.
+Old TSVs and untagged outputs are preserved, so the first rerun can create
+additional DXFs. Editors may strip comments; concurrent exports can conflict
+at no-replace publication. Metadata labels are untrusted display text.
+[Corresponding source and offline tests](source/ExcelsisHelper-1.4.33-macros-20261013.1/)
+and the [macro audit](AUDIT-MACROS-1.4.33-20261013.1.md) accompany this revision.
+
 The separate [DXF revision for existing Helper 1.4.29 installations](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.29-20261008.1)
 remains available and unchanged. The 1.4.33 CNC macro needs the newer host
-configuration and is not offered to Helper 1.4.29. The DXF exporter uses
+configuration and is not offered to Helper 1.4.29. That older DXF revision uses
 quantity-first prefixes on short and long DXF names, keeps filename stems
 to at most 20 characters, and preserves collision-safe assignments in a
 per-folder `DXF-names.tsv` map. The map contains source paths and should
