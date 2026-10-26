@@ -1,6 +1,6 @@
 # Excelsis Helper
 
-Excelsis Helper 1.4.33 is an open-source Windows workflow companion
+Excelsis Helper 1.4.37 is an open-source Windows workflow companion
 for SOLIDWORKS. It provides recent-document access, document search,
 read-only embedded/thumbnail preview extraction, SWP macro launching,
 AutoRadius, assembly backup, PDF drawing export, Work Logger, local machining
@@ -9,35 +9,36 @@ capture through the documented SOLIDWORKS API.
 
 ## Download
 
-- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.33/ExcelsisHelper-1.4.33-Setup.exe)
-- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.33)
-- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.33/ExcelsisHelper-1.4.33-source.zip)
-- [Latest laser DXF macro revision for Helper 1.4.33](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.33-20261013.1)
+- [Windows installer](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.37/ExcelsisHelper-1.4.37-Setup.exe)
+- [Release notes and all assets](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-v1.4.37)
+- [Exact corresponding-source archive](https://github.com/simonsystem609/ExcelsisHelper/releases/download/excelsis-helper-v1.4.37/ExcelsisHelper-1.4.37-source.zip)
+- [Current CNC and laser macros for Helper 1.4.37](https://github.com/simonsystem609/ExcelsisHelper/releases/tag/excelsis-helper-macros-1.4.37-20261026.1)
 - [SHA-256 checksums](SHA256SUMS.txt)
-- [Licensing and security audit](AUDIT-1.4.33.md)
+- [Licensing and security audit](AUDIT-1.4.37.md)
 
 The installer and application binaries are currently unsigned, so Windows may
 show a SmartScreen warning. Kaspersky 21.26 scanned byte-identical copies of
 the final installer and source ZIP with zero detections or suspicions. Verify
 the installer SHA-256 before running it.
 
-This update adds configurable Recent Documents path-copy and folder-open
-actions, configured CAM-folder output with collision-safe CNC DXF numbering,
-document-card improvements, missing-reference safeguards, and bounded CAD
-capture caching. All nine SWP macros, configurable shortcuts, Work Logger,
-viewport thumbnails and read-only previews remain. Two project-authored .NET
-utilities were rebuilt twice with identical output from included C# source
-using signed external compiler/API inputs; no vendor DLL is bundled.
-No installed or live SOLIDWORKS workflow acceptance is claimed.
+This release adds an Update Center for Helper, Viewer and compatible macros,
+recent-document full-path search and configurable project-folder creation.
+Cumulative laser DXF changes cover native rational curves, outline/through-opening
+cleanup and nonuniform stock depth through 20 mm with 0.02 mm tolerance.
+All nine macros, configurable shortcuts, Work Logger, previews and documented
+SOLIDWORKS API capture remain. Electron is patched to 42.11.18. Both
+project-authored native utilities were rebuilt twice with identical outputs;
+no vendor DLL or personal deployment data is bundled.
 
-Fresh 1.4.33 installations already contain the three CNC/DXF macro pairs in
-revision 20261011.1. ExcelsisView 1.1.35 or later offers the opt-in **Update
-macros** button for compatible immutable revisions. It verifies hashes,
-backs up existing macros and offers Retry/Later if SOLIDWORKS has locked a
-file; save your work and close or restart SOLIDWORKS when prompted. No
-background macro replacement or forced process termination occurs.
+Fresh 1.4.37 installations contain the CNC/DXF pairs in revision 20261026.1.
+Use Helper's Settings or Update button, or the compatible Viewer's **Update
+macros** button, for later verified revisions. Updates require approval, back
+up current macros and offer Retry/Later when SOLIDWORKS locks a file.
+Save work and close or restart SOLIDWORKS when prompted. No background macro
+replacement or forced process termination occurs. This revision is only for
+Helper 1.4.37; older compatible streams remain unchanged.
 
-Optional laser DXF revision **20261013.1** adds selection-only/all-visible
+Earlier laser DXF revision **20261013.1** adds selection-only/all-visible
 instance scope, embedded full filenames/configurations and safe tight-budget
 numbering. It is compatible only with Helper 1.4.33 and does not replace or
 bump the app installer. The manual Update macros button supplies the newer
@@ -65,20 +66,21 @@ target laser-software acceptance have not been performed.
 ## Source and build
 
 The exact expanded corresponding source is committed under
-[`source/ExcelsisHelper-1.4.33/`](source/ExcelsisHelper-1.4.33/).
+[`source/ExcelsisHelper-1.4.37/`](source/ExcelsisHelper-1.4.37/).
 Older complete source snapshots are preserved at their immutable release
 tags and source archives rather than duplicated on the current branch.
 
 On Windows with Node.js 24:
 
 ```powershell
-npm.cmd ci --legacy-peer-deps
+npm.cmd ci
+node node_modules/electron/install.js
 npm.cmd test
 npm.cmd run dist
 ```
 
 See
-[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.33/docs/BUILDING.md)
+[`docs/BUILDING.md`](source/ExcelsisHelper-1.4.37/docs/BUILDING.md)
 for the complete non-launching build and inspection flow.
 
 ## Project links
@@ -105,3 +107,5 @@ confidential files.
 
 Excelsis Helper is `GPL-3.0-only`; see [LICENSE](LICENSE). Bundled third-party
 components retain their own compatible licenses and notices.
+
+
